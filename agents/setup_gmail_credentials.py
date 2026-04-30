@@ -5,14 +5,23 @@ import shutil
 from pathlib import Path
 from typing import Any, List
 
+from google_auth_oauthlib.flow import InstalledAppFlow
+
+from src.config import settings
+
 
 CLIENT_TYPES = ("installed", "web")
 REQUIRED_CLIENT_KEYS = {"client_id", "client_secret", "auth_uri", "token_uri"}
+GMAIL_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.readonly",
+]
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DOWNLOADS_DIR = Path.home() / "Downloads"
 TARGET_DIR = PROJECT_ROOT / "credentials"
 TARGET_FILE = TARGET_DIR / "gmail_credentials.json"
 BACKUP_FILE = TARGET_DIR / "gmail_credentials_backup.json"
+TOKEN_FILE = Path(settings.gmail_token_path) if settings.gmail_token_path else TARGET_DIR / "gmail_token.json"
 
 
 def is_valid_google_oauth_file(path: Path) -> bool:
@@ -142,6 +151,26 @@ def copy_credentials(source: Path) -> bool:
     return True
 
 
+def authenticate_gmail() -> bool:
+    if TOKEN_FILE.exists():
+        print("Token already exists")
+        return True
+
+    if not TARGET_FILE.is_file():
+        print("Gmail credentials file is missing; skipping authentication")
+        return False
+
+    TARGET_DIR.mkdir(parents=True, exist_ok=True)
+    TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    flow = InstalledAppFlow.from_client_secrets_file(str(TARGET_FILE), GMAIL_SCOPES)
+    print("Opening browser for Gmail authentication...")
+    creds = flow.run_local_server(port=0)
+    print("Authentication successful")
+    TOKEN_FILE.write_text(creds.to_json(), encoding="utf-8")
+    print("Token saved to credentials/gmail_token.json")
+    return True
+
+
 def main() -> None:
     candidates = find_candidates()
 
@@ -149,6 +178,7 @@ def main() -> None:
         source = candidates[0]
         if copy_credentials(source):
             print(f"Copied Gmail OAuth credentials from {source} to {TARGET_FILE}")
+            authenticate_gmail()
         return
 
     if len(candidates) > 1:
