@@ -11,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DOWNLOADS_DIR = Path.home() / "Downloads"
 TARGET_DIR = PROJECT_ROOT / "credentials"
 TARGET_FILE = TARGET_DIR / "gmail_credentials.json"
+BACKUP_FILE = TARGET_DIR / "gmail_credentials_backup.json"
 
 
 def is_valid_google_oauth_file(path: Path) -> bool:
@@ -50,9 +51,35 @@ def find_candidates() -> List[Path]:
     return candidates
 
 
-def copy_credentials(source: Path) -> None:
+def _backup_path() -> Path:
+    if not BACKUP_FILE.exists():
+        return BACKUP_FILE
+
+    index = 1
+    while True:
+        backup = TARGET_DIR / f"gmail_credentials_backup_{index}.json"
+        if not backup.exists():
+            return backup
+        index += 1
+
+
+def copy_credentials(source: Path) -> bool:
     TARGET_DIR.mkdir(parents=True, exist_ok=True)
+    if TARGET_FILE.exists():
+        try:
+            TARGET_FILE.unlink()
+            print("Deleted existing credentials file")
+        except OSError:
+            try:
+                TARGET_FILE.rename(_backup_path())
+                print("Renamed locked credentials file")
+            except OSError as exc:
+                print(f"Could not replace locked credentials file: {exc}")
+                print("Close any app using credentials/gmail_credentials.json, then run this script again.")
+                return False
     shutil.copy2(source, TARGET_FILE)
+    print("Copied new credentials file")
+    return True
 
 
 def main() -> None:
@@ -60,8 +87,8 @@ def main() -> None:
 
     if len(candidates) == 1:
         source = candidates[0]
-        copy_credentials(source)
-        print(f"Copied Gmail OAuth credentials from {source} to {TARGET_FILE}")
+        if copy_credentials(source):
+            print(f"Copied Gmail OAuth credentials from {source} to {TARGET_FILE}")
         return
 
     if len(candidates) > 1:
