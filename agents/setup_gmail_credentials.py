@@ -11,8 +11,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 
-from src.config import settings
-
 
 CLIENT_TYPES = ("installed", "web")
 REQUIRED_CLIENT_KEYS = {"client_id", "client_secret", "auth_uri", "token_uri"}
@@ -25,7 +23,7 @@ DOWNLOADS_DIR = Path.home() / "Downloads"
 TARGET_DIR = PROJECT_ROOT / "credentials"
 TARGET_FILE = TARGET_DIR / "gmail_credentials.json"
 BACKUP_FILE = TARGET_DIR / "gmail_credentials_backup.json"
-TOKEN_FILE = Path(settings.gmail_token_path) if settings.gmail_token_path else TARGET_DIR / "gmail_token.json"
+TOKEN_FILE = TARGET_DIR / "gmail_token.json"
 
 
 def is_valid_google_oauth_file(path: Path) -> bool:
@@ -166,9 +164,12 @@ def authenticate_gmail() -> bool:
 
     TARGET_DIR.mkdir(parents=True, exist_ok=True)
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    flow = InstalledAppFlow.from_client_secrets_file(str(TARGET_FILE), GMAIL_SCOPES)
+    flow = InstalledAppFlow.from_client_secrets_file(
+        str(TARGET_FILE),
+        scopes=GMAIL_SCOPES,
+    )
     print("Opening browser for Gmail authentication...")
-    creds = flow.run_local_server(port=0)
+    creds = flow.run_local_server(port=0, open_browser=True)
     print("Authentication successful")
     TOKEN_FILE.write_text(creds.to_json(), encoding="utf-8")
     print("Token saved to credentials/gmail_token.json")
@@ -176,6 +177,14 @@ def authenticate_gmail() -> bool:
 
 
 def main() -> None:
+    if TOKEN_FILE.exists():
+        print("Token already exists")
+        return
+
+    if TARGET_FILE.is_file():
+        authenticate_gmail()
+        return
+
     candidates = find_candidates()
 
     if len(candidates) == 1:
