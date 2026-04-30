@@ -81,7 +81,10 @@ def run_daily_scrape() -> None:
     logger = DailyLogger()
     logger.event("Starting lead scraper daily run")
     logger.event(f"DRY_RUN: {settings.dry_run}")
-    logger.event(f"MAX_LEADS_PER_RUN: {settings.daily_lead_limit}")
+    logger.event(f"MAX_NEW_LEADS_PER_RUN: {settings.max_new_leads_per_run}")
+    logger.event(f"MAX_PLACES_RESULTS_PER_LOCATION: {settings.max_places_results_per_location}")
+    logger.event(f"MAX_TOTAL_CANDIDATES: {settings.max_total_candidates}")
+    logger.count("target_new_leads_requested", settings.max_new_leads_per_run)
     logger.event(f"Google Places API key present: {'yes' if settings.google_places_api_key else 'no'}")
     logger.event(f"Notion API key present: {'yes' if settings.notion_api_key else 'no'}")
     logger.event(f"Notion database ID present: {'yes' if settings.notion_database_id else 'no'}")
@@ -113,14 +116,15 @@ def run_daily_scrape() -> None:
         logger.write()
         return
 
-    written_count = 0
+    accepted_count = 0
     seen_domains: set[str] = set()
 
-    for found in found_leads:
-        if written_count >= settings.daily_lead_limit:
-            logger.event(f"Daily lead limit reached: {settings.daily_lead_limit}")
+    for found in found_leads[: settings.max_total_candidates]:
+        if accepted_count >= settings.max_new_leads_per_run:
+            logger.event(f"Target new lead count reached: {settings.max_new_leads_per_run}")
             break
 
+        logger.count("candidates_processed")
         domain = normalize_domain(found.website)
         if not found.website:
             logger.count("no_website_skipped")
@@ -154,7 +158,7 @@ def run_daily_scrape() -> None:
                 action = "update" if duplicate else "insert"
                 logger.count("would_update" if duplicate else "would_insert")
                 logger.event(f"DRY RUN: would {action} {audited.business_name} ({audited.domain})")
-                written_count += 1
+                accepted_count += 1
                 continue
 
             if duplicate:
@@ -174,10 +178,23 @@ def run_daily_scrape() -> None:
                 logger.count("new_inserted")
                 logger.event(f"Inserted new lead: {audited.business_name} ({page_id})")
 
-            written_count += 1
+            accepted_count += 1
         except Exception as exc:
             logger.error(found.business_name, str(exc))
             continue
+
+    if accepted_count < settings.max_new_leads_per_run:
+        if len(found_leads) >= settings.max_total_candidates:
+            reason = "candidate safety cap reached before target"
+        else:
+            reason = "candidate pool exhausted after skips, duplicates, low scores, or errors"
+        logger.event(
+            "Target not reached: "
+            f"accepted {accepted_count}/{settings.max_new_leads_per_run}; "
+            f"processed {logger.counters.get('candidates_processed', 0)}/"
+            f"{min(len(found_leads), settings.max_total_candidates)} candidates; "
+            f"reason: {reason}"
+        )
 
     logger.event("Lead scraper daily run complete")
     logger.write()

@@ -13,6 +13,8 @@ class DailyLogger:
     counters: Dict[str, int] = field(
         default_factory=lambda: {
             "total_found": 0,
+            "target_new_leads_requested": 0,
+            "candidates_processed": 0,
             "total_skipped": 0,
             "duplicates_found": 0,
             "new_inserted": 0,
@@ -65,13 +67,17 @@ class DailyLogger:
     def print_summary(self) -> None:
         print("")
         print("Lead Scraper Run Summary")
+        print(f"- target new leads requested: {self.counters.get('target_new_leads_requested', 0)}")
+        print(f"- total candidates pulled: {self.counters.get('total_found', 0)}")
+        print(f"- candidates processed: {self.counters.get('candidates_processed', 0)}")
         print(f"- leads found from Google Places: {self.counters.get('total_found', 0)}")
         print(f"- leads skipped: {self.counters.get('total_skipped', 0)}")
         print(f"- duplicates found: {self.counters.get('duplicates_found', 0)}")
+        print(f"- duplicates skipped: {self.counters.get('duplicates_skipped', 0)}")
         print(f"- leads scraped: {self.counters.get('leads_scraped', 0)}")
         print(f"- leads that would be inserted in dry run: {self.counters.get('would_insert', 0)}")
         print(f"- leads that would be updated in dry run: {self.counters.get('would_update', 0)}")
-        print(f"- leads actually inserted: {self.counters.get('new_inserted', 0)}")
+        print(f"- new leads inserted: {self.counters.get('new_inserted', 0)}")
         print(f"- duplicates enriched: {self.counters.get('existing_enriched', 0)}")
         print(f"- errors: {self.counters.get('errors', 0)}")
         if self.skipped:

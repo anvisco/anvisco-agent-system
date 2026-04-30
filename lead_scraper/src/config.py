@@ -32,21 +32,28 @@ class ScraperSettings:
     openai_api_key: str
     niche: str
     locations: list[str]
-    daily_lead_limit: int
+    max_new_leads_per_run: int
+    max_places_results_per_location: int
+    max_total_candidates: int
     request_timeout_seconds: int
     filter_franchises: bool
     min_lead_score: int
     dry_run: bool
 
 
-def _daily_limit() -> int:
+def _bounded_int(value: int, minimum: int, maximum: int) -> int:
+    return max(minimum, min(value, maximum))
+
+
+def _max_new_leads_per_run() -> int:
     configured = _as_int(
-        os.getenv("MAX_LEADS_PER_RUN")
+        os.getenv("MAX_NEW_LEADS_PER_RUN")
+        or os.getenv("MAX_LEADS_PER_RUN")
         or os.getenv("LEAD_SCRAPER_DAILY_LIMIT")
         or os.getenv("DAILY_LEAD_LIMIT"),
-        10,
+        15,
     )
-    return max(10, min(configured, 20))
+    return _bounded_int(configured, 1, 50)
 
 
 settings = ScraperSettings(
@@ -61,7 +68,9 @@ settings = ScraperSettings(
         for item in os.getenv("LEAD_SCRAPER_LOCATIONS", "Toronto, North York, Willowdale").split(",")
         if item.strip()
     ],
-    daily_lead_limit=_daily_limit(),
+    max_new_leads_per_run=_max_new_leads_per_run(),
+    max_places_results_per_location=_bounded_int(_as_int(os.getenv("MAX_PLACES_RESULTS_PER_LOCATION"), 20), 1, 20),
+    max_total_candidates=_bounded_int(_as_int(os.getenv("MAX_TOTAL_CANDIDATES"), 60), 1, 200),
     request_timeout_seconds=_as_int(os.getenv("SCRAPER_REQUEST_TIMEOUT_SECONDS"), 12),
     filter_franchises=_as_bool(os.getenv("FILTER_FRANCHISES"), default=True),
     min_lead_score=_as_int(os.getenv("MIN_LEAD_SCORE"), 3),

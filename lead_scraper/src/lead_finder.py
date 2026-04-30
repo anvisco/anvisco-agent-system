@@ -59,7 +59,7 @@ def _search_places_new(text_query: str) -> List[Dict[str, Any]]:
         },
         json={
             "textQuery": text_query,
-            "maxResultCount": 10,
+            "maxResultCount": settings.max_places_results_per_location,
             "languageCode": "en",
             "regionCode": "CA",
         },
@@ -143,7 +143,7 @@ def find_local_leads() -> List[FoundLead]:
         places = _search_places_new(query)
 
         for place in places:
-            if len(found) >= settings.daily_lead_limit * 2:
+            if len(found) >= settings.max_total_candidates:
                 print(f"Total unique leads found: {len(found)}")
                 return found
             dedupe_key = _dedupe_key(place, location)

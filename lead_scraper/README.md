@@ -16,7 +16,9 @@ PAGESPEED_API_KEY=
 OPENAI_API_KEY=
 LEAD_SCRAPER_NICHE=dental clinic
 LEAD_SCRAPER_LOCATIONS=Toronto, North York, Willowdale
-LEAD_SCRAPER_DAILY_LIMIT=10
+MAX_NEW_LEADS_PER_RUN=15
+MAX_PLACES_RESULTS_PER_LOCATION=20
+MAX_TOTAL_CANDIDATES=60
 SCRAPER_REQUEST_TIMEOUT_SECONDS=12
 FILTER_FRANCHISES=true
 MIN_LEAD_SCORE=3
@@ -48,8 +50,11 @@ python agents/run_lead_scraper.py
 7. Scrape homepage and likely contact/about/team/services pages.
 8. Extract email, phone, booking URL, services, languages, and social links.
 9. Generate `Top Issue`, `Outreach Angle`, `Recommended Offer`, and `Lead Quality Score`.
-10. Write qualified leads with `Outreach Status = New Lead`.
-11. Write a daily log to `logs/lead_scraper_YYYY-MM-DD.log`.
+10. Continue processing until `MAX_NEW_LEADS_PER_RUN` accepted leads are inserted/enriched, `MAX_TOTAL_CANDIDATES` is reached, or the candidate pool is exhausted.
+11. Write qualified leads with `Outreach Status = New Lead`.
+12. Write a daily log to `logs/lead_scraper_YYYY-MM-DD.log`.
+
+`MAX_NEW_LEADS_PER_RUN` controls the target accepted lead count. `MAX_PLACES_RESULTS_PER_LOCATION` controls the Google Places search pool per location. `MAX_TOTAL_CANDIDATES` is the hard safety cap that prevents uncapped scraping.
 
 ## Notion Fields
 
