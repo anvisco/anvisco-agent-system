@@ -1,21 +1,25 @@
 name: Outreach Daily
 
 on:
+  schedule:
+    - cron: "0 14 * * 1-5"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  lead-scraper-dry-run:
+  lead-scraper:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
       NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
       GOOGLE_PLACES_API_KEY: ${{ secrets.GOOGLE_PLACES_API_KEY }}
       MAX_LEADS_PER_RUN: ${{ secrets.MAX_LEADS_PER_RUN }}
       CREATE_GMAIL_DRAFTS: ${{ secrets.CREATE_GMAIL_DRAFTS }}
-      DRY_RUN: "true"
+      DRY_RUN: ${{ secrets.DRY_RUN }}
+      SEND_EMAILS: "false"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
