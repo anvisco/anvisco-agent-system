@@ -1,0 +1,79 @@
+# Anvisco Lead Scraper
+
+This package finds local dental clinic leads, scrapes their websites, audits the website basics, deduplicates against Notion, and writes qualified leads into the Outreach Tracker with `Outreach Status = New Lead`.
+
+It does not create Gmail drafts and does not send email.
+
+## Setup
+
+Add these values to `.env`:
+
+```bash
+NOTION_API_KEY=
+NOTION_DATABASE_ID=
+GOOGLE_PLACES_API_KEY=
+PAGESPEED_API_KEY=
+OPENAI_API_KEY=
+LEAD_SCRAPER_NICHE=dental clinic
+LEAD_SCRAPER_LOCATIONS=Toronto, North York, Willowdale
+LEAD_SCRAPER_DAILY_LIMIT=10
+SCRAPER_REQUEST_TIMEOUT_SECONDS=12
+FILTER_FRANCHISES=true
+MIN_LEAD_SCORE=3
+DRY_RUN=true
+```
+
+`PAGESPEED_API_KEY` and `OPENAI_API_KEY` are optional. PageSpeed is not required for a run; when it is not configured the scraper records `PageSpeed not checked`.
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Run:
+
+```bash
+python agents/run_lead_scraper.py
+```
+
+## Flow
+
+1. Search Google Places for dental clinics in the configured locations.
+2. Skip records with no website.
+3. Normalize domains for deduplication.
+4. Check existing Notion records by domain, email, phone, then business name plus city.
+5. Skip contacted or closed duplicates.
+6. Enrich early-stage duplicates when new data is better.
+7. Scrape homepage and likely contact/about/team/services pages.
+8. Extract email, phone, booking URL, services, languages, and social links.
+9. Generate `Top Issue`, `Outreach Angle`, `Recommended Offer`, and `Lead Quality Score`.
+10. Write qualified leads with `Outreach Status = New Lead`.
+11. Write a daily log to `logs/lead_scraper_YYYY-MM-DD.log`.
+
+## Notion Fields
+
+The writer uses existing Notion fields only. It skips fields that do not exist and never changes the Notion schema.
+
+Expected fields:
+
+- Business Name
+- Niche
+- City
+- Website
+- Domain
+- Email
+- Phone
+- Address
+- Google Maps URL
+- Rating
+- Review Count
+- Top Issue
+- Outreach Angle
+- Recommended Offer
+- Lead Quality Score
+- Website Status
+- Source
+- Last Scraped Date
+- Scrape Notes
+- Outreach Status
