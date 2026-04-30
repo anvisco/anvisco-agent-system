@@ -160,6 +160,16 @@ def _build_checkbox_filter(property_name: str, property_type: str, value: bool) 
     return None
 
 
+def _build_empty_filter(property_name: str, property_type: str) -> Optional[Dict[str, Any]]:
+    if property_type == "rich_text":
+        return {"property": property_name, "rich_text": {"is_empty": True}}
+    if property_type == "title":
+        return {"property": property_name, "title": {"is_empty": True}}
+
+    print(f"Warning: skipping unsupported empty filter type '{property_type}' for {property_name}")
+    return None
+
+
 def _property_update(property_type: str, value: Any) -> Optional[Dict[str, Any]]:
     if value is None:
         return None
@@ -297,6 +307,13 @@ def query_new_leads(limit: int = MAX_LEADS_PER_RUN) -> List[Dict[str, Any]]:
             filter_parts.append({"property": email_property, "email": {"is_not_empty": True}})
         else:
             print(f"Warning: skipping unsupported filter type '{email_type}' for {email_property}")
+
+    email_1_draft_property = _first_existing_property_name(properties, EMAIL_1_DRAFT_CANDIDATES)
+    if email_1_draft_property:
+        _print_detected_fields(properties, [email_1_draft_property], "Email 1 draft field")
+        empty_draft_filter = _build_empty_filter(email_1_draft_property, properties[email_1_draft_property].get("type"))
+        if empty_draft_filter:
+            filter_parts.append(empty_draft_filter)
 
     dnc_property = _first_existing_property_name(properties, DO_NOT_CONTACT_CANDIDATES)
     if dnc_property:
@@ -579,6 +596,11 @@ def _handle_missing_required_fields(schema: Dict[str, Any], lead: Dict[str, Any]
 
 def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
     lead_name = _get_lead_name(lead)
+    email_1_draft_property = _first_existing_property_name(lead.get("properties", {}), EMAIL_1_DRAFT_CANDIDATES)
+    if email_1_draft_property and _get_text_value(_get_property(lead, email_1_draft_property)):
+        print(f"Skipped {lead_name}: Email 1 Draft is already filled")
+        return "duplicate_draft"
+
     sequence, email = process_lead(lead)
     if not email:
         _handle_missing_required_fields(schema, lead, ["Email"])
