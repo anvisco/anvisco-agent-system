@@ -6,6 +6,7 @@ from typing import Optional
 
 @dataclass
 class FoundLead:
+    google_place_id: str
     business_name: str
     website: str
     phone: str = ""
@@ -40,6 +41,7 @@ class ScrapedWebsite:
 
 @dataclass
 class AuditedLead:
+    google_place_id: str
     business_name: str
     niche: str
     city: str
@@ -53,6 +55,7 @@ class AuditedLead:
     review_count: Optional[int]
     top_issue: str
     outreach_angle: str
+    angle_bucket: str
     recommended_offer: str
     lead_quality_score: int
     website_status: str

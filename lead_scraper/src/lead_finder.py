@@ -118,6 +118,7 @@ def _dedupe_key(place: Dict[str, Any], location: str) -> tuple[str, str]:
 def _to_found_lead(place: Dict[str, Any], location: str) -> FoundLead:
     phone = place.get("nationalPhoneNumber", "") or place.get("internationalPhoneNumber", "")
     return FoundLead(
+        google_place_id=place.get("id", ""),
         business_name=_display_name(place),
         website=place.get("websiteUri", ""),
         phone=phone,

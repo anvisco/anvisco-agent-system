@@ -35,6 +35,23 @@ def _recommended_offer(top_issue: str) -> str:
     return "Funnel optimization"
 
 
+def _angle_bucket(top_issue: str, scraped: ScrapedWebsite) -> str:
+    issue_text = f"{top_issue} {' '.join(scraped.issue_signals)}".lower()
+    if "booking" in issue_text or "patient flow" in issue_text or "phone or email" in issue_text:
+        return "No Booking Funnel"
+    if "too many cta" in issue_text or "competing" in issue_text:
+        return "Too Many CTAs"
+    if "mobile" in issue_text:
+        return "Weak Mobile Experience"
+    if "outdated" in issue_text or "slow" in issue_text or "low trust" in issue_text:
+        return "Outdated Website"
+    if "multilingual" in issue_text:
+        return "No Multilingual Support"
+    if "structure" in issue_text or "scan" in issue_text or "content" in issue_text:
+        return "Poor Content Structure"
+    return "Looks Good But Does Not Convert"
+
+
 def score_lead(found: FoundLead, scraped: ScrapedWebsite, top_issue: str) -> int:
     score = 2
     if scraped.email:
@@ -53,6 +70,7 @@ def score_lead(found: FoundLead, scraped: ScrapedWebsite, top_issue: str) -> int
 def audit_lead(found: FoundLead, scraped: ScrapedWebsite) -> AuditedLead:
     top_issue = _top_issue(scraped)
     offer = _recommended_offer(top_issue)
+    angle_bucket = _angle_bucket(top_issue, scraped)
     score = score_lead(found, scraped, top_issue)
     notes = [
         f"Website status: {scraped.website_status}",
@@ -68,6 +86,7 @@ def audit_lead(found: FoundLead, scraped: ScrapedWebsite) -> AuditedLead:
     )
 
     return AuditedLead(
+        google_place_id=found.google_place_id,
         business_name=scraped.business_name or found.business_name,
         niche="Dental clinic",
         city=found.city,
@@ -81,6 +100,7 @@ def audit_lead(found: FoundLead, scraped: ScrapedWebsite) -> AuditedLead:
         review_count=found.review_count,
         top_issue=top_issue,
         outreach_angle=outreach_angle,
+        angle_bucket=angle_bucket,
         recommended_offer=offer,
         lead_quality_score=score,
         website_status=scraped.website_status,

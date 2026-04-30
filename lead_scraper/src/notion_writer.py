@@ -21,9 +21,11 @@ CONTACTED_OR_CLOSED = {
     "Closed",
 }
 EARLY_STAGE = {"New Lead", "Draft Ready"}
+SOURCE_GOOGLE_PLACES_NEW = "Google Places New"
 
 
 FIELD_MAP = {
+    "Google Place ID": "google_place_id",
     "Business Name": "business_name",
     "Niche": "niche",
     "City": "city",
@@ -37,6 +39,7 @@ FIELD_MAP = {
     "Review Count": "review_count",
     "Top Issue": "top_issue",
     "Outreach Angle": "outreach_angle",
+    "Angle Bucket": "angle_bucket",
     "Recommended Offer": "recommended_offer",
     "Lead Quality Score": "lead_quality_score",
     "Website Status": "website_status",
@@ -141,13 +144,39 @@ def load_existing_leads() -> tuple[list[Dict[str, Any]], Dict[str, Any], str]:
     return leads, data_source, data_source_id
 
 
+def ensure_source_option(schema_properties: Dict[str, Any], data_source_id: str) -> None:
+    source_property = schema_properties.get("Source", {})
+    if source_property.get("type") != "select":
+        return
+    existing_options = source_property.get("select", {}).get("options", [])
+    if any(option.get("name") == SOURCE_GOOGLE_PLACES_NEW for option in existing_options):
+        return
+
+    updated_options = [
+        {"name": option.get("name", ""), "color": option.get("color", "default")}
+        for option in existing_options
+        if option.get("name")
+    ]
+    updated_options.append({"name": SOURCE_GOOGLE_PLACES_NEW, "color": "default"})
+    get_client().data_sources.update(
+        data_source_id=data_source_id,
+        properties={
+            "Source": {
+                "select": {
+                    "options": updated_options,
+                }
+            }
+        },
+    )
+
+
 def _lead_key_values(page: Dict[str, Any]) -> Dict[str, str]:
     props = page.get("properties", {})
     return {
+        "google_place_id": _plain_text(props.get("Google Place ID", {})),
         "domain": normalize_domain(_plain_text(props.get("Domain", {})) or _plain_text(props.get("Website", {}))),
-        "email": _plain_text(props.get("Email", {})).lower(),
         "phone": clean_phone(_plain_text(props.get("Phone", {}))),
-        "name_city": f"{_plain_text(props.get('Business Name', {})).lower()}|{_plain_text(props.get('City', {})).lower()}",
+        "name_address": f"{_plain_text(props.get('Business Name', {})).lower()}|{_plain_text(props.get('Address', {})).lower()}",
         "status": _plain_text(props.get("Outreach Status", {})),
         "last_scraped": _plain_text(props.get("Last Scraped Date", {})),
         "score": _plain_text(props.get("Lead Quality Score", {})),
@@ -156,37 +185,37 @@ def _lead_key_values(page: Dict[str, Any]) -> Dict[str, str]:
 
 def find_duplicate(audited: AuditedLead, existing_pages: list[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return find_duplicate_by_keys(
+        google_place_id=audited.google_place_id,
         domain=audited.domain,
-        email=audited.email,
         phone=audited.phone,
         business_name=audited.business_name,
-        city=audited.city,
+        address=audited.address,
         existing_pages=existing_pages,
     )
 
 
 def find_duplicate_by_keys(
+    google_place_id: str,
     domain: str,
-    email: str,
     phone: str,
     business_name: str,
-    city: str,
+    address: str,
     existing_pages: list[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
+    target_google_place_id = google_place_id.strip()
     target_domain = normalize_domain(domain)
-    target_email = email.lower()
     target_phone = clean_phone(phone)
-    target_name_city = f"{business_name.lower()}|{city.lower()}"
-    for key in ("domain", "email", "phone", "name_city"):
+    target_name_address = f"{business_name.lower()}|{address.lower()}"
+    for key in ("google_place_id", "domain", "phone", "name_address"):
         for page in existing_pages:
             values = _lead_key_values(page)
-            if key == "domain" and target_domain and values[key] == target_domain:
+            if key == "google_place_id" and target_google_place_id and values[key] == target_google_place_id:
                 return page
-            if key == "email" and target_email and values[key] == target_email:
+            if key == "domain" and target_domain and values[key] == target_domain:
                 return page
             if key == "phone" and target_phone and values[key] == target_phone:
                 return page
-            if key == "name_city" and target_name_city.strip("|") and values[key] == target_name_city:
+            if key == "name_address" and target_name_address.strip("|") and values[key] == target_name_address:
                 return page
     return None
 
