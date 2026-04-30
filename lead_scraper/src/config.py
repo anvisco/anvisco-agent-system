@@ -40,7 +40,12 @@ class ScraperSettings:
 
 
 def _daily_limit() -> int:
-    configured = _as_int(os.getenv("LEAD_SCRAPER_DAILY_LIMIT") or os.getenv("DAILY_LEAD_LIMIT"), 10)
+    configured = _as_int(
+        os.getenv("MAX_LEADS_PER_RUN")
+        or os.getenv("LEAD_SCRAPER_DAILY_LIMIT")
+        or os.getenv("DAILY_LEAD_LIMIT"),
+        10,
+    )
     return max(10, min(configured, 20))
 
 

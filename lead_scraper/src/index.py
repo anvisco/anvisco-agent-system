@@ -57,6 +57,7 @@ def _skip_duplicate_if_needed(found: FoundLead, existing_pages: list[Dict[str, A
     if not duplicate:
         return False
 
+    logger.count("duplicates_found")
     status = _existing_status(duplicate)
     if status in CONTACTED_OR_CLOSED:
         logger.count("already_contacted_skipped")
@@ -74,6 +75,16 @@ def _skip_duplicate_if_needed(found: FoundLead, existing_pages: list[Dict[str, A
 def run_daily_scrape() -> None:
     logger = DailyLogger()
     logger.event("Starting lead scraper daily run")
+    logger.event(f"DRY_RUN: {settings.dry_run}")
+    logger.event(f"MAX_LEADS_PER_RUN: {settings.daily_lead_limit}")
+    logger.event(f"Google Places API key present: {'yes' if settings.google_places_api_key else 'no'}")
+    logger.event(f"Notion API key present: {'yes' if settings.notion_api_key else 'no'}")
+    logger.event(f"Notion database ID present: {'yes' if settings.notion_database_id else 'no'}")
+    logger.event(f"Search niche/query base: {settings.niche}")
+    for location in settings.locations:
+        logger.event(f"Search location: {location}")
+        logger.event(f"Search query used: {settings.niche} in {location}")
+    logger.event("Lead finder implementation: Google Places Text Search + Place Details API")
 
     try:
         existing_pages, data_source, data_source_id = load_existing_leads()
@@ -86,6 +97,10 @@ def run_daily_scrape() -> None:
     try:
         found_leads = find_local_leads()
         logger.count("total_found", len(found_leads))
+        logger.event(f"Leads found from Google Places: {len(found_leads)}")
+        if not found_leads:
+            for location in settings.locations:
+                logger.event(f"Google Places returned 0 leads for query/location: {settings.niche} in {location}")
     except Exception as exc:
         logger.error("Lead Finder", str(exc))
         logger.write()
@@ -96,6 +111,7 @@ def run_daily_scrape() -> None:
 
     for found in found_leads:
         if written_count >= settings.daily_lead_limit:
+            logger.event(f"Daily lead limit reached: {settings.daily_lead_limit}")
             break
 
         domain = normalize_domain(found.website)
@@ -114,8 +130,12 @@ def run_daily_scrape() -> None:
                 continue
 
             scraped = scrape_website(found)
+            logger.count("leads_scraped")
+            logger.event(f"Scraped lead: {found.business_name} ({domain})")
             audited = audit_lead(found, scraped)
             duplicate = find_duplicate(audited, existing_pages)
+            if duplicate:
+                logger.count("duplicates_found")
             valid, reason = _is_valid_for_write(audited)
             if not valid:
                 if reason.startswith("low score"):
@@ -125,6 +145,7 @@ def run_daily_scrape() -> None:
 
             if settings.dry_run:
                 action = "update" if duplicate else "insert"
+                logger.count("would_update" if duplicate else "would_insert")
                 logger.event(f"DRY RUN: would {action} {audited.business_name} ({audited.domain})")
                 written_count += 1
                 continue

@@ -53,16 +53,21 @@ def find_local_leads() -> List[FoundLead]:
     seen_place_ids: set[str] = set()
 
     for location in settings.locations:
+        query = f"{settings.niche} in {location}"
+        print(f"Google Places query: {query}")
         response = requests.get(
             "https://maps.googleapis.com/maps/api/place/textsearch/json",
             params={
-                "query": f"{settings.niche} in {location}",
+                "query": query,
                 "key": settings.google_places_api_key,
             },
             timeout=settings.request_timeout_seconds,
         )
         response.raise_for_status()
         results = response.json().get("results", [])
+        print(f"Google Places results for '{query}': {len(results)}")
+        if not results:
+            print(f"No Google Places leads returned for query/location: {query}")
 
         for result in results:
             if len(found) >= settings.daily_lead_limit * 2:
