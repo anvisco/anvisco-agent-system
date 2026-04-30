@@ -17,6 +17,20 @@ EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 PHONE_RE = re.compile(r"(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}")
 LANGUAGE_KEYWORDS = ("english", "french", "spanish", "mandarin", "cantonese", "farsi", "arabic", "hindi", "urdu", "tagalog")
 SERVICE_KEYWORDS = ("implant", "invisalign", "orthodont", "cosmetic", "emergency", "cleaning", "whitening", "root canal", "denture")
+COMMON_EMAIL_PATHS = ("/contact", "/contact-us", "/about", "/team", "/new-patients")
+PREFERRED_EMAIL_PREFIXES = ("info", "admin", "reception", "hello", "appointments")
+BAD_EMAIL_LOCAL_TOKENS = ("no-reply", "noreply", "donotreply", "do-not-reply", "privacy")
+BAD_EMAIL_LOCALS = ("example", "test")
+WEBSITE_BUILDER_DOMAINS = (
+    "wix.com",
+    "wixpress.com",
+    "squarespace.com",
+    "wordpress.com",
+    "weebly.com",
+    "godaddy.com",
+    "webflow.com",
+    "shopify.com",
+)
 
 
 def _ensure_url(url: str) -> str:
@@ -41,10 +55,12 @@ def _fetch(url: str) -> tuple[Optional[str], float, str]:
 
 
 def _candidate_links(base_url: str, soup: BeautifulSoup) -> list[str]:
-    keywords = ("contact", "about", "team", "doctor", "dentist", "service")
+    keywords = ("contact", "about", "team", "doctor", "dentist", "service", "new-patient")
     links: list[str] = []
     for anchor in soup.find_all("a", href=True):
         href = anchor["href"]
+        if href.lower().startswith("mailto:"):
+            continue
         text = f"{href} {anchor.get_text(' ', strip=True)}".lower()
         if any(keyword in text for keyword in keywords):
             absolute = urljoin(base_url, href)
@@ -54,7 +70,72 @@ def _candidate_links(base_url: str, soup: BeautifulSoup) -> list[str]:
     for link in links:
         if link not in unique:
             unique.append(link)
-    return unique[:4]
+    return unique[:6]
+
+
+def _common_page_links(base_url: str) -> list[str]:
+    return [urljoin(base_url, path) for path in COMMON_EMAIL_PATHS]
+
+
+def _clean_email(email: str) -> str:
+    return email.strip().strip(".,;:()[]<>\"'").lower()
+
+
+def _is_website_builder_domain(domain: str) -> bool:
+    return any(domain == builder or domain.endswith(f".{builder}") for builder in WEBSITE_BUILDER_DOMAINS)
+
+
+def _is_bad_email(email: str) -> bool:
+    local, separator, domain = email.partition("@")
+    if not separator or not local or not domain:
+        return True
+    if domain.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")):
+        return True
+    if any(token in local for token in BAD_EMAIL_LOCAL_TOKENS):
+        return True
+    if local in BAD_EMAIL_LOCALS or domain.startswith(("example.", "test.")):
+        return True
+    if _is_website_builder_domain(domain):
+        return True
+    return False
+
+
+def _emails_from_mailto(href: str) -> list[str]:
+    if not href.lower().startswith("mailto:"):
+        return []
+    address_part = href.split(":", 1)[1].split("?", 1)[0]
+    return EMAIL_RE.findall(address_part)
+
+
+def _extract_emails_from_page(soup: BeautifulSoup) -> list[str]:
+    emails = EMAIL_RE.findall(soup.get_text(" ", strip=True))
+    for anchor in soup.find_all("a", href=True):
+        emails.extend(_emails_from_mailto(anchor["href"]))
+    return emails
+
+
+def _email_preference_index(email: str) -> int:
+    local = email.split("@", 1)[0]
+    for index, prefix in enumerate(PREFERRED_EMAIL_PREFIXES):
+        if local == prefix or local.startswith(f"{prefix}.") or local.startswith(f"{prefix}-"):
+            return index
+    return len(PREFERRED_EMAIL_PREFIXES)
+
+
+def _rank_emails(emails: Iterable[str], website_domain: str) -> list[str]:
+    unique: list[str] = []
+    for email in emails:
+        cleaned = _clean_email(email)
+        if cleaned and cleaned not in unique and not _is_bad_email(cleaned):
+            unique.append(cleaned)
+
+    def sort_key(email: str) -> tuple[int, int, int]:
+        email_domain = email.split("@", 1)[1]
+        is_same_domain = email_domain == website_domain or email_domain.endswith(f".{website_domain}")
+        preference = _email_preference_index(email)
+        return (preference, 0 if is_same_domain else 1, unique.index(email))
+
+    return sorted(unique, key=sort_key)
 
 
 def _extract_booking_url(base_url: str, soup: BeautifulSoup) -> str:
@@ -123,17 +204,26 @@ def scrape_website(found: FoundLead) -> ScrapedWebsite:
     soup = BeautifulSoup(html, "html.parser")
     pages = [(final_url, soup)]
 
-    for link in _candidate_links(final_url, soup):
+    page_links: list[str] = []
+    for link in [*_common_page_links(final_url), *_candidate_links(final_url, soup)]:
+        if link not in page_links:
+            page_links.append(link)
+
+    for link in page_links:
         page_html, _, page_url = _fetch(link)
         if page_html:
             pages.append((page_url, BeautifulSoup(page_html, "html.parser")))
 
     all_text = "\n".join(page_soup.get_text(" ", strip=True) for _, page_soup in pages)
-    all_html_text = "\n".join(str(page_soup) for _, page_soup in pages)
 
-    emails = [email for email in EMAIL_RE.findall(all_text) if not email.lower().endswith((".png", ".jpg"))]
+    emails = _rank_emails((email for _, page_soup in pages for email in _extract_emails_from_page(page_soup)), domain)
     phones = PHONE_RE.findall(all_text)
+    scraped.found_emails = emails
     scraped.email = emails[0] if emails else ""
+    if emails:
+        scraped.technical_notes.append(f"Emails found on website: {', '.join(emails)}")
+    else:
+        scraped.technical_notes.append("No email found on website")
     scraped.phone = display_phone(phones[0]) if phones and not scraped.phone else scraped.phone
     scraped.contact_page_url = next((url for url, _ in pages if "contact" in url.lower()), "")
     scraped.booking_url = next((_extract_booking_url(url, page_soup) for url, page_soup in pages if _extract_booking_url(url, page_soup)), "")

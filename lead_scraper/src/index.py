@@ -142,6 +142,8 @@ def run_daily_scrape() -> None:
             scraped = scrape_website(found)
             logger.count("leads_scraped")
             logger.event(f"Scraped lead: {found.business_name} ({domain})")
+            if not scraped.email:
+                logger.event("No email found on website")
             audited = audit_lead(found, scraped)
             duplicate = find_duplicate(audited, existing_pages)
             if duplicate:

@@ -35,6 +35,7 @@ class ScrapedWebsite:
     https_active: bool = False
     mobile_friendly: str = "unknown"
     pagespeed_score: Optional[int] = None
+    found_emails: list[str] = field(default_factory=list)
     technical_notes: list[str] = field(default_factory=list)
     issue_signals: list[str] = field(default_factory=list)
 

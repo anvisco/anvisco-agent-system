@@ -50,7 +50,7 @@ python agents/run_lead_scraper.py
 5. Skip contacted or closed duplicates.
 6. Enrich early-stage duplicates when new data is better.
 7. Scrape homepage and likely contact/about/team/services pages.
-8. Extract email, phone, booking URL, services, languages, and social links.
+8. Visit the homepage plus common contact/about pages to extract email, phone, booking URL, services, languages, and social links.
 9. Generate `Top Issue`, `Outreach Angle`, `Recommended Offer`, and `Lead Quality Score`.
 10. Continue processing until `MAX_NEW_LEADS_PER_RUN` accepted leads are inserted/enriched, `MAX_TOTAL_CANDIDATES` is reached, or the candidate pool is exhausted.
 11. Write qualified leads with `Outreach Status = New Lead`.
