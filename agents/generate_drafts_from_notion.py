@@ -32,6 +32,7 @@ TIER_CANDIDATES = ["Tier"]
 TOP_ISSUE_CANDIDATES = ["Top Issue"]
 OUTREACH_ANGLE_CANDIDATES = ["Outreach Angle"]
 WEBSITE_CANDIDATES = ["Website"]
+RECOMMENDED_OFFER_CANDIDATES = ["Recommended Offer"]
 LEAD_QUALITY_SCORE_CANDIDATES = ["Lead Quality Score"]
 ANGLE_BUCKET_CANDIDATES = ["Angle Bucket"]
 LOOM_RECOMMENDED_CANDIDATES = ["Loom Recommended"]
@@ -244,30 +245,18 @@ def _lead_quality_score(lead: Dict[str, Any]) -> int:
         return 0
 
 
-def _missing_email_1_fields(lead: Dict[str, Any], angle_bucket: str) -> List[str]:
+def _missing_email_1_fields(lead: Dict[str, Any]) -> List[str]:
     missing: List[str] = []
     properties = lead.get("properties", {})
     checks = [
         ("Business Name", _get_text_value(_get_property(lead, _first_existing_property_name(properties, NAME_FIELD_CANDIDATES) or ""))),
         ("Website", _get_text_value(_get_property(lead, _first_existing_property_name(properties, WEBSITE_CANDIDATES) or ""))),
         ("Email", _get_text_value(_get_property(lead, _first_existing_property_name(properties, EMAIL_FIELD_CANDIDATES) or ""))),
-        ("Top Issue", _get_text_value(_get_property(lead, _first_existing_property_name(properties, TOP_ISSUE_CANDIDATES) or ""))),
-        ("Outreach Angle", _get_text_value(_get_property(lead, _first_existing_property_name(properties, OUTREACH_ANGLE_CANDIDATES) or ""))),
-        ("Angle Bucket", angle_bucket),
     ]
     for label, value in checks:
         if not value:
             missing.append(label)
     return missing
-
-
-def _has_required_outreach_fields(lead: Dict[str, Any], angle_bucket: str) -> bool:
-    return not _missing_email_1_fields(lead, angle_bucket)
-
-
-def _score_allows_draft(lead: Dict[str, Any], angle_bucket: str) -> bool:
-    score = _lead_quality_score(lead)
-    return score >= 3 or _has_required_outreach_fields(lead, angle_bucket)
 
 
 def _has_duplicate_draft_for_step(lead: Dict[str, Any], target_step: str) -> bool:
@@ -283,6 +272,36 @@ def _draft_ids_from_gmail_response(draft: Dict[str, Any]) -> Tuple[str, str]:
     draft_id = draft.get("id", "")
     thread_id = draft.get("message", {}).get("threadId", "")
     return draft_id, thread_id
+
+
+def _lead_presence_flag(lead: Dict[str, Any], candidates: List[str]) -> bool:
+    properties = lead.get("properties", {})
+    property_name = _first_existing_property_name(properties, candidates)
+    if not property_name:
+        return False
+    return bool(_get_text_value(_get_property(lead, property_name)))
+
+
+def _log_skip_details(lead: Dict[str, Any], reason: str) -> None:
+    properties = lead.get("properties", {})
+    outreach_status_property = _first_existing_property_name(properties, OUTREACH_STATUS_FIELD_CANDIDATES)
+    gmail_draft_id_property = _first_existing_property_name(properties, GMAIL_DRAFT_ID_CANDIDATES)
+    email_1_draft_property = _first_existing_property_name(properties, EMAIL_1_DRAFT_CANDIDATES)
+    outreach_status = _get_text_value(_get_property(lead, outreach_status_property or ""))
+    gmail_draft_id_present = bool(_get_text_value(_get_property(lead, gmail_draft_id_property or "")))
+    email_1_draft_present = bool(_get_text_value(_get_property(lead, email_1_draft_property or "")))
+    business_name_present = _lead_presence_flag(lead, NAME_FIELD_CANDIDATES)
+    email_present = _lead_presence_flag(lead, EMAIL_FIELD_CANDIDATES)
+    website_present = _lead_presence_flag(lead, WEBSITE_CANDIDATES)
+
+    print(f"Skipped lead: {_get_lead_name(lead)}")
+    print(f"- Business Name present: {'yes' if business_name_present else 'no'}")
+    print(f"- Email present: {'yes' if email_present else 'no'}")
+    print(f"- Website present: {'yes' if website_present else 'no'}")
+    print(f"- Outreach Status: {outreach_status or '<empty>'}")
+    print(f"- Gmail Draft ID present: {'yes' if gmail_draft_id_present else 'no'}")
+    print(f"- Email 1 Draft present: {'yes' if email_1_draft_present else 'no'}")
+    print(f"- Exact skip reason: {reason}")
 
 
 def query_new_leads(limit: int = MAX_LEADS_PER_RUN) -> List[Dict[str, Any]]:
@@ -319,9 +338,6 @@ def query_new_leads(limit: int = MAX_LEADS_PER_RUN) -> List[Dict[str, Any]]:
     email_1_draft_property = _first_existing_property_name(properties, EMAIL_1_DRAFT_CANDIDATES)
     if email_1_draft_property:
         _print_detected_fields(properties, [email_1_draft_property], "Email 1 draft field")
-        empty_draft_filter = _build_empty_filter(email_1_draft_property, properties[email_1_draft_property].get("type"))
-        if empty_draft_filter:
-            filter_parts.append(empty_draft_filter)
 
     dnc_property = _first_existing_property_name(properties, DO_NOT_CONTACT_CANDIDATES)
     if dnc_property:
@@ -520,6 +536,8 @@ def build_email_1_sequence_updates(
     _add_update(updates, properties, EMAIL_3_DRAFT_CANDIDATES, emails["email_3"]["body"])
     _add_update(updates, properties, DRAFT_CREATED_DATE_CANDIDATES, datetime.now(timezone.utc).date().isoformat())
     _add_update(updates, properties, ANGLE_BUCKET_CANDIDATES, sequence["angle_bucket"])
+    _add_update_if_empty(updates, properties, lead, OUTREACH_ANGLE_CANDIDATES, sequence["outreach_angle"])
+    _add_update_if_empty(updates, properties, lead, RECOMMENDED_OFFER_CANDIDATES, sequence["recommended_offer"])
     _add_update(updates, properties, LOOM_RECOMMENDED_CANDIDATES, sequence["loom_recommended"])
     if sequence["loom_script"]:
         _add_update(updates, properties, LOOM_SCRIPT_CANDIDATES, sequence["loom_script"])
@@ -628,29 +646,41 @@ def _handle_missing_required_fields(schema: Dict[str, Any], lead: Dict[str, Any]
 
 def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
     lead_name = _get_lead_name(lead)
-    email_1_draft_property = _first_existing_property_name(lead.get("properties", {}), EMAIL_1_DRAFT_CANDIDATES)
-    if email_1_draft_property and _get_text_value(_get_property(lead, email_1_draft_property)):
-        print(f"Skipped {lead_name}: Email 1 Draft is already filled")
-        return "duplicate_draft"
+    properties = lead.get("properties", {})
+    outreach_status_property = _first_existing_property_name(properties, OUTREACH_STATUS_FIELD_CANDIDATES)
+    email_property = _first_existing_property_name(properties, EMAIL_FIELD_CANDIDATES)
+    website_property = _first_existing_property_name(properties, WEBSITE_CANDIDATES)
+    name_property = _first_existing_property_name(properties, NAME_FIELD_CANDIDATES)
+    email_1_draft_property = _first_existing_property_name(properties, EMAIL_1_DRAFT_CANDIDATES)
+    gmail_draft_id_property = _first_existing_property_name(properties, GMAIL_DRAFT_ID_CANDIDATES)
 
-    sequence, email = process_lead(lead)
+    outreach_status = _get_text_value(_get_property(lead, outreach_status_property or ""))
+    email = _get_text_value(_get_property(lead, email_property or ""))
+    website = _get_text_value(_get_property(lead, website_property or ""))
+    business_name = _get_text_value(_get_property(lead, name_property or ""))
+    email_1_draft = _get_text_value(_get_property(lead, email_1_draft_property or ""))
+    gmail_draft_id = _get_text_value(_get_property(lead, gmail_draft_id_property or ""))
+
+    if outreach_status != "New Lead":
+        _log_skip_details(lead, f"Outreach Status is {outreach_status or '<empty>'}")
+        return "skipped_wrong_status"
+    if not business_name:
+        _log_skip_details(lead, "Business Name is missing")
+        return "skipped_missing_business_name"
+    if not website:
+        _log_skip_details(lead, "Website is missing")
+        return "skipped_missing_website"
     if not email:
-        _handle_missing_required_fields(schema, lead, ["Email"])
-        return "skipped"
+        _log_skip_details(lead, "Email is missing")
+        return "skipped_missing_email"
+    if gmail_draft_id:
+        _log_skip_details(lead, "Gmail Draft ID already exists")
+        return "skipped_already_drafted"
+    if email_1_draft:
+        _log_skip_details(lead, "Email 1 Draft already exists")
+        return "skipped_already_drafted"
 
-    missing = _missing_email_1_fields(lead, sequence["angle_bucket"])
-    if missing:
-        _handle_missing_required_fields(schema, lead, missing)
-        return "skipped"
-
-    score = _lead_quality_score(lead)
-    if not _score_allows_draft(lead, sequence["angle_bucket"]):
-        print(
-            f"Skipped {lead_name}: Lead Quality Score is {score}, and required outreach fields are incomplete"
-        )
-        return "skipped"
-    if score < 3:
-        print(f"Allowing {lead_name}: Lead Quality Score is {score}, but required outreach fields are present")
+    sequence, _ = process_lead(lead)
 
     email_1 = sequence["emails"]["email_1"]
 
@@ -797,15 +827,15 @@ def main() -> None:
         raise ValueError("Outreach Status property is missing from the Notion data source.")
     print_validation_warnings(schema)
     summary = {
-        "email_1_copy_generated": 0,
+        "records_checked": 0,
+        "eligible_records": 0,
+        "drafts_generated": 0,
         "gmail_drafts_created": 0,
-        "email_1_drafts_created": 0,
-        "email_2_drafts_created": 0,
-        "email_3_drafts_created": 0,
-        "sequence_saved": 0,
-        "already_drafted_skipped": 0,
-        "duplicate_drafts_skipped": 0,
-        "records_skipped": 0,
+        "skipped_missing_email": 0,
+        "skipped_missing_website": 0,
+        "skipped_already_drafted": 0,
+        "skipped_wrong_status": 0,
+        "skipped_missing_business_name": 0,
         "errors": 0,
     }
 
@@ -817,22 +847,29 @@ def main() -> None:
             print_no_eligible_lead_debug(schema)
         else:
             for lead in leads[:MAX_LEADS_PER_RUN]:
+                summary["records_checked"] += 1
                 try:
                     result = _process_new_lead(schema, lead)
                     if result == "email_1_created":
-                        summary["email_1_copy_generated"] += 1
+                        summary["eligible_records"] += 1
+                        summary["drafts_generated"] += 1
                         summary["gmail_drafts_created"] += 1
-                        summary["email_1_drafts_created"] += 1
                     elif result == "sequence_saved":
-                        summary["email_1_copy_generated"] += 1
-                        summary["sequence_saved"] += 1
+                        summary["eligible_records"] += 1
+                        summary["drafts_generated"] += 1
                     elif result == "dry_run_email_1":
-                        summary["email_1_copy_generated"] += 1
-                    elif result == "duplicate_draft":
-                        summary["already_drafted_skipped"] += 1
-                        summary["duplicate_drafts_skipped"] += 1
-                    elif result == "skipped":
-                        summary["records_skipped"] += 1
+                        summary["eligible_records"] += 1
+                        summary["drafts_generated"] += 1
+                    elif result == "skipped_missing_email":
+                        summary["skipped_missing_email"] += 1
+                    elif result == "skipped_missing_website":
+                        summary["skipped_missing_website"] += 1
+                    elif result == "skipped_missing_business_name":
+                        summary["skipped_missing_business_name"] += 1
+                    elif result == "skipped_already_drafted":
+                        summary["skipped_already_drafted"] += 1
+                    elif result == "skipped_wrong_status":
+                        summary["skipped_wrong_status"] += 1
                 except Exception as exc:
                     summary["errors"] += 1
                     print(f"Error processing {_get_lead_name(lead)}: {exc}")
@@ -849,14 +886,8 @@ def main() -> None:
                     result = _process_due_followup(schema, lead)
                     if result == "email_2_created":
                         summary["gmail_drafts_created"] += 1
-                        summary["email_2_drafts_created"] += 1
                     elif result == "email_3_created":
                         summary["gmail_drafts_created"] += 1
-                        summary["email_3_drafts_created"] += 1
-                    elif result == "duplicate_draft":
-                        summary["duplicate_drafts_skipped"] += 1
-                    elif result == "skipped":
-                        summary["records_skipped"] += 1
                 except Exception as exc:
                     summary["errors"] += 1
                     print(f"Error creating follow-up for {_get_lead_name(lead)}: {exc}")

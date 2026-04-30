@@ -10,11 +10,11 @@ SIGNATURE = "Brian Nguyen\nAnvisco\nhttps://www.anvisco.com"
 ANGLE_SUBJECTS = {
     "No Booking Funnel": "Quick fix for your booking flow",
     "Too Many CTAs": "Quick thought on your website flow",
-    "Looks Good But Does Not Convert": "Your site looks solid - quick conversion fix",
+    "Looks Good But Does Not Convert": "Quick idea for your website",
     "Weak Mobile Experience": "Mobile experience on your site",
     "Outdated Website": "Quick idea for your website",
     "No Multilingual Support": "Quick idea for your Toronto audience",
-    "Poor Content Structure": "Your site structure (quick fix)",
+    "Poor Content Structure": "Your site structure",
 }
 ANGLE_POSITIONING = {
     "No Booking Funnel": "You are losing patients who will not call.",
@@ -34,6 +34,10 @@ ANGLE_CONVERSION_EXPLANATIONS = {
     "No Multilingual Support": "In a city like Toronto, missing language support can make part of the local audience harder to convert.",
     "Poor Content Structure": "If services and next steps are hard to scan, people read the page but do not take action.",
 }
+FALLBACK_TOP_ISSUE = "the site could use a clearer path from visitor interest to booking"
+FALLBACK_ANGLE_BUCKET = "Looks Good But Does Not Convert"
+FALLBACK_RECOMMENDED_OFFER = "Funnel Optimization"
+HIGH_INTENT_BUCKETS = {"No Booking Funnel", "Too Many CTAs"}
 
 
 def _extract_text(value: Dict[str, Any]) -> str:
@@ -74,7 +78,13 @@ def _get_mentionable_issue(lead: Dict[str, Any]) -> str:
         text = _get_property_text(lead, field)
         if text:
             return text
-    return "there is room to make the website clearer and easier to use"
+    return FALLBACK_TOP_ISSUE
+
+
+def _derive_outreach_angle(top_issue: str, angle_bucket: str) -> str:
+    if angle_bucket in HIGH_INTENT_BUCKETS:
+        return f"Turn {top_issue} into a clearer booking path for patients."
+    return f"Improve the path from website visits to booked patients around {top_issue}."
 
 
 def _mentions_multilingual_opportunity(lead: Dict[str, Any]) -> bool:
@@ -150,42 +160,41 @@ def _loom_script(angle_bucket: str) -> str:
 
 def generate_email_sequence(lead: Dict[str, Any]) -> Dict[str, Any]:
     business_name = _get_first_property_text(lead, ("Business Name", "Practice Name", "Clinic Name", "Name")) or "there"
-    recipient_name = _get_first_property_text(
-        lead,
-        ("Dentist / Owner Name", "Owner Name", "Dentist Name", "Contact Name"),
-    ) or business_name
     top_issue = _get_mentionable_issue(lead)
-    outreach_angle = _get_property_text(lead, "Outreach Angle")
-    city = _get_property_text(lead, "City")
-    angle_bucket = map_angle_bucket(lead)
+    angle_bucket = map_angle_bucket(lead) or FALLBACK_ANGLE_BUCKET
+    outreach_angle = _get_property_text(lead, "Outreach Angle") or _derive_outreach_angle(top_issue, angle_bucket)
+    recommended_offer = _get_property_text(lead, "Recommended Offer") or FALLBACK_RECOMMENDED_OFFER
     email_1_subject = ANGLE_SUBJECTS.get(angle_bucket, "Quick idea for your website")
-    conversion_explanation = ANGLE_CONVERSION_EXPLANATIONS.get(
-        angle_bucket,
-        "Small website friction can reduce how many visitors turn into booked patients.",
-    )
-    if angle_bucket == "No Multilingual Support" and city:
-        conversion_explanation = (
-            f"In {city}, missing language support can make part of the local audience harder to convert."
-        )
     loom_recommended = _loom_recommended(lead, angle_bucket)
 
-    email_1_body = (
-        f"Hello {recipient_name},\n\n"
-        f"I took a quick look at {business_name} and noticed {top_issue}\n\n"
-        "I build websites that run, grow, and optimize your business.\n\n"
-        f"{conversion_explanation}\n\n"
-        "If you're looking to improve how your site converts into booked patients, I can show you how I'd approach it.\n\n"
-        f"{SIGNATURE}"
-    )
+    if angle_bucket in HIGH_INTENT_BUCKETS:
+        email_1_body = (
+            f"Hi {business_name} team,\n\n"
+            f"I took a quick look at your website and noticed {top_issue}.\n\n"
+            "The main issue is that the site has information, but the booking path does not feel as clear as it could be. "
+            "That usually means some patients leave instead of taking the next step.\n\n"
+            "I build websites that run, grow, and optimize your business. For clinics, I focus on the parts that turn visitors into booked patients: clearer service paths, stronger booking moments, and less friction.\n\n"
+            "If useful, I can show you what I would tighten on your site.\n\n"
+            f"{SIGNATURE}"
+        )
+    else:
+        email_1_body = (
+            f"Hi {business_name} team,\n\n"
+            f"I took a quick look at your website and noticed {top_issue}.\n\n"
+            "That usually creates friction for patients who are ready to book but do not get a clear next step.\n\n"
+            "I build websites that run, grow, and optimize your business. For clinics, that means turning the site into a cleaner patient conversion flow, not just making it look better.\n\n"
+            "If improving how your site turns visitors into booked patients is something you are considering, I can show you how I would approach it.\n\n"
+            f"{SIGNATURE}"
+        )
     email_2_body = (
-        f"Hello {recipient_name},\n\n"
+        f"Hello {business_name} team,\n\n"
         "Wanted to follow up on this.\n\n"
         f"The angle I noticed was {angle_bucket.lower()}. A lot of dental sites have this issue, so even with traffic, bookings do not come through as consistently as they should.\n\n"
         "Small structural changes usually make a big difference, especially around how the booking path is presented.\n\n"
         "Happy to walk you through what I'd change on your site specifically if that's useful."
     )
     email_3_body = (
-        f"Hello {recipient_name},\n\n"
+        f"Hello {business_name} team,\n\n"
         "Not sure if this is a priority on your end right now.\n\n"
         f"If improving {angle_bucket.lower()} and turning more website visitors into booked patients is something you're considering, I'm happy to share a few ideas tailored to your clinic.\n\n"
         "If not, no worries, I'll close this on my end."
@@ -195,6 +204,7 @@ def generate_email_sequence(lead: Dict[str, Any]) -> Dict[str, Any]:
         "angle_bucket": angle_bucket,
         "loom_recommended": loom_recommended,
         "loom_script": _loom_script(angle_bucket) if loom_recommended else "",
+        "recommended_offer": recommended_offer,
         "outreach_angle": outreach_angle,
         "emails": {
             "email_1": {"subject": email_1_subject, "body": email_1_body},
