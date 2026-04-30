@@ -3,6 +3,9 @@ name: Outreach Daily
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   lead-scraper-dry-run:
     runs-on: ubuntu-latest

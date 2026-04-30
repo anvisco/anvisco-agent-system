@@ -1,7 +1,13 @@
 .env
+.env.*
+!.env.example
 credentials/
 credentials.json
 token.json
+*.pem
+*.key
+*.p12
+*.p8
 logs/
 __pycache__/
 .venv/

@@ -42,6 +42,6 @@ settings = Settings(
     gmail_client_secret=os.getenv("GMAIL_CLIENT_SECRET", "").strip(),
     gmail_refresh_token=os.getenv("GMAIL_REFRESH_TOKEN", "").strip(),
     dry_run=_as_bool(os.getenv("DRY_RUN"), default=True),
-    create_gmail_drafts=_as_bool(os.getenv("CREATE_GMAIL_DRAFTS"), default=True),
+    create_gmail_drafts=_as_bool(os.getenv("CREATE_GMAIL_DRAFTS"), default=False),
     daily_lead_limit=_as_int(os.getenv("DAILY_LEAD_LIMIT"), default=25),
 )
