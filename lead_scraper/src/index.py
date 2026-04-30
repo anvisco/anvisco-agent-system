@@ -84,7 +84,7 @@ def run_daily_scrape() -> None:
     for location in settings.locations:
         logger.event(f"Search location: {location}")
         logger.event(f"Search query used: {settings.niche} in {location}")
-    logger.event("Lead finder implementation: Google Places Text Search + Place Details API")
+    logger.event("Lead finder implementation: Places API (New) searchText")
 
     try:
         existing_pages, data_source, data_source_id = load_existing_leads()

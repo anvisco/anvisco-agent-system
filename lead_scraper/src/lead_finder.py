@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, List
 
 import requests
 
 from .config import settings
 from .models import FoundLead
+from .utils import clean_phone, normalize_domain
 
 
 FRANCHISE_KEYWORDS = (
@@ -16,6 +17,22 @@ FRANCHISE_KEYWORDS = (
     "toothworks",
     "monarch dentistry",
 )
+PLACES_SEARCH_TEXT_ENDPOINT = "https://places.googleapis.com/v1/places:searchText"
+PLACES_FIELD_MASK = ",".join(
+    (
+        "places.id",
+        "places.displayName",
+        "places.formattedAddress",
+        "places.location",
+        "places.rating",
+        "places.userRatingCount",
+        "places.nationalPhoneNumber",
+        "places.internationalPhoneNumber",
+        "places.websiteUri",
+        "places.googleMapsUri",
+        "places.businessStatus",
+    )
+)
 
 
 def _is_obvious_franchise(name: str, website: str) -> bool:
@@ -23,26 +40,94 @@ def _is_obvious_franchise(name: str, website: str) -> bool:
     return any(keyword in combined for keyword in FRANCHISE_KEYWORDS)
 
 
-def _extract_city(address: str) -> str:
-    parts = [part.strip() for part in address.split(",") if part.strip()]
-    if len(parts) >= 2:
-        return parts[-3] if len(parts) >= 3 else parts[-2]
-    return ""
+def _safe_error_message(payload: Dict[str, Any]) -> str:
+    error = payload.get("error", {})
+    code = error.get("status") or error.get("code") or "UNKNOWN"
+    message = error.get("message") or payload.get("error_message") or "No error message returned"
+    return f"{code}: {message}"
 
 
-def _details_for_place(place_id: str) -> Dict[str, Any]:
-    response = requests.get(
-        "https://maps.googleapis.com/maps/api/place/details/json",
-        params={
-            "place_id": place_id,
-            "fields": "name,formatted_address,formatted_phone_number,website,rating,user_ratings_total,url,business_status",
-            "key": settings.google_places_api_key,
+def _search_places_new(text_query: str) -> List[Dict[str, Any]]:
+    print("Google Places endpoint used: Places API (New) searchText")
+    print(f"Google Places query: {text_query}")
+    response = requests.post(
+        PLACES_SEARCH_TEXT_ENDPOINT,
+        headers={
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": settings.google_places_api_key,
+            "X-Goog-FieldMask": PLACES_FIELD_MASK,
+        },
+        json={
+            "textQuery": text_query,
+            "maxResultCount": 10,
+            "languageCode": "en",
+            "regionCode": "CA",
         },
         timeout=settings.request_timeout_seconds,
     )
-    response.raise_for_status()
-    payload = response.json()
-    return payload.get("result", {})
+    print(f"Google Places HTTP status for '{text_query}': {response.status_code}")
+
+    try:
+        payload = response.json()
+    except ValueError:
+        print(f"Google Places returned non-JSON response for query: {text_query}")
+        response.raise_for_status()
+        return []
+
+    if response.status_code != 200:
+        error_message = _safe_error_message(payload)
+        print(f"Google Places error for '{text_query}': {error_message}")
+        if "PERMISSION_DENIED" in error_message:
+            print("Places API (New) may not be enabled or API key restriction is wrong.")
+        if "INVALID_ARGUMENT" in error_message:
+            print(f"Google Places INVALID_ARGUMENT response body: {payload}")
+        return []
+
+    places = payload.get("places", [])
+    print(f"Google Places places returned for '{text_query}': {len(places)}")
+    if not places:
+        print(f"No Google Places leads returned for exact textQuery: {text_query}")
+    return places
+
+
+def _display_name(place: Dict[str, Any]) -> str:
+    display_name = place.get("displayName", {})
+    if isinstance(display_name, dict):
+        return display_name.get("text", "")
+    return ""
+
+
+def _dedupe_key(place: Dict[str, Any], location: str) -> tuple[str, str]:
+    place_id = place.get("id", "")
+    if place_id:
+        return "place_id", place_id
+
+    website = normalize_domain(place.get("websiteUri", ""))
+    if website:
+        return "domain", website
+
+    phone = clean_phone(place.get("nationalPhoneNumber", "") or place.get("internationalPhoneNumber", ""))
+    if phone:
+        return "phone", phone
+
+    name = _display_name(place).strip().lower()
+    address = place.get("formattedAddress", "").strip().lower()
+    return "name_address", f"{name}|{address or location.lower()}"
+
+
+def _to_found_lead(place: Dict[str, Any], location: str) -> FoundLead:
+    phone = place.get("nationalPhoneNumber", "") or place.get("internationalPhoneNumber", "")
+    return FoundLead(
+        business_name=_display_name(place),
+        website=place.get("websiteUri", ""),
+        phone=phone,
+        address=place.get("formattedAddress", ""),
+        city=location,
+        rating=place.get("rating"),
+        review_count=place.get("userRatingCount"),
+        google_maps_url=place.get("googleMapsUri", ""),
+        source="Google Places New",
+    )
 
 
 def find_local_leads() -> List[FoundLead]:
@@ -50,53 +135,30 @@ def find_local_leads() -> List[FoundLead]:
         raise ValueError("GOOGLE_PLACES_API_KEY is missing.")
 
     found: List[FoundLead] = []
-    seen_place_ids: set[str] = set()
+    seen_keys: set[tuple[str, str]] = set()
 
     for location in settings.locations:
         query = f"{settings.niche} in {location}"
-        print(f"Google Places query: {query}")
-        response = requests.get(
-            "https://maps.googleapis.com/maps/api/place/textsearch/json",
-            params={
-                "query": query,
-                "key": settings.google_places_api_key,
-            },
-            timeout=settings.request_timeout_seconds,
-        )
-        response.raise_for_status()
-        results = response.json().get("results", [])
-        print(f"Google Places results for '{query}': {len(results)}")
-        if not results:
-            print(f"No Google Places leads returned for query/location: {query}")
+        places = _search_places_new(query)
 
-        for result in results:
+        for place in places:
             if len(found) >= settings.daily_lead_limit * 2:
+                print(f"Total unique leads found: {len(found)}")
                 return found
-            place_id = result.get("place_id")
-            if not place_id or place_id in seen_place_ids:
+            dedupe_key = _dedupe_key(place, location)
+            if dedupe_key in seen_keys:
                 continue
-            seen_place_ids.add(place_id)
+            seen_keys.add(dedupe_key)
 
-            details = _details_for_place(place_id)
-            if details.get("business_status") and details["business_status"] != "OPERATIONAL":
+            if place.get("businessStatus") and place["businessStatus"] != "OPERATIONAL":
                 continue
 
-            website = details.get("website", "")
-            name = details.get("name", result.get("name", ""))
+            website = place.get("websiteUri", "")
+            name = _display_name(place)
             if settings.filter_franchises and _is_obvious_franchise(name, website):
                 continue
 
-            found.append(
-                FoundLead(
-                    business_name=name,
-                    website=website,
-                    phone=details.get("formatted_phone_number", ""),
-                    address=details.get("formatted_address", result.get("formatted_address", "")),
-                    city=_extract_city(details.get("formatted_address", result.get("formatted_address", ""))),
-                    rating=details.get("rating"),
-                    review_count=details.get("user_ratings_total"),
-                    google_maps_url=details.get("url", ""),
-                )
-            )
+            found.append(_to_found_lead(place, location))
 
+    print(f"Total unique leads found: {len(found)}")
     return found
