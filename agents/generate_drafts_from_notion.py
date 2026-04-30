@@ -744,7 +744,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         choices=("all", "email1", "followups"),
-        default="all",
+        default="email1",
         help="Run the full draft agent, only Email 1 creation, or only due follow-up drafts.",
     )
     return parser.parse_args()
@@ -760,10 +760,13 @@ def main() -> None:
         raise ValueError("Outreach Status property is missing from the Notion data source.")
     print_validation_warnings(schema)
     summary = {
+        "email_1_copy_generated": 0,
+        "gmail_drafts_created": 0,
         "email_1_drafts_created": 0,
         "email_2_drafts_created": 0,
         "email_3_drafts_created": 0,
         "sequence_saved": 0,
+        "already_drafted_skipped": 0,
         "duplicate_drafts_skipped": 0,
         "records_skipped": 0,
         "errors": 0,
@@ -780,10 +783,16 @@ def main() -> None:
                 try:
                     result = _process_new_lead(schema, lead)
                     if result == "email_1_created":
+                        summary["email_1_copy_generated"] += 1
+                        summary["gmail_drafts_created"] += 1
                         summary["email_1_drafts_created"] += 1
                     elif result == "sequence_saved":
+                        summary["email_1_copy_generated"] += 1
                         summary["sequence_saved"] += 1
+                    elif result == "dry_run_email_1":
+                        summary["email_1_copy_generated"] += 1
                     elif result == "duplicate_draft":
+                        summary["already_drafted_skipped"] += 1
                         summary["duplicate_drafts_skipped"] += 1
                     elif result == "skipped":
                         summary["records_skipped"] += 1
@@ -802,8 +811,10 @@ def main() -> None:
                 try:
                     result = _process_due_followup(schema, lead)
                     if result == "email_2_created":
+                        summary["gmail_drafts_created"] += 1
                         summary["email_2_drafts_created"] += 1
                     elif result == "email_3_created":
+                        summary["gmail_drafts_created"] += 1
                         summary["email_3_drafts_created"] += 1
                     elif result == "duplicate_draft":
                         summary["duplicate_drafts_skipped"] += 1
