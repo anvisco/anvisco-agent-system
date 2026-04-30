@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import os
+import sys
 import json
 import shutil
 from pathlib import Path
 from typing import Any, List
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 

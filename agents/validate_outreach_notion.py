@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import os
 import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from collections import defaultdict
 from typing import Any, Dict, Iterable, Optional
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from notion_client import Client
 

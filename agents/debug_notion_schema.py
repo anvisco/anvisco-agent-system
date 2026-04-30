@@ -4,8 +4,12 @@ python -m agents.debug_notion_schema
 
 from __future__ import annotations
 
+import os
+import sys
 import json
 from typing import Any, Dict
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from notion_client import Client
 

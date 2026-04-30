@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import os
 import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from datetime import date, timedelta
 from email.utils import parseaddr
 from typing import Any, Dict, Optional
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from notion_client import Client
 
