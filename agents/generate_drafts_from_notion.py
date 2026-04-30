@@ -15,7 +15,18 @@ from src.gmail_client import create_draft
 from src.notion_client import get_data_source_schema, get_database_and_data_source
 
 
-MAX_LEADS_PER_RUN = 10
+def _max_drafts_per_run() -> int:
+    raw_value = os.getenv("MAX_DRAFTS_PER_RUN")
+    if raw_value is None or not raw_value.strip():
+        return 25
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return 25
+    return max(1, value)
+
+
+MAX_DRAFTS_PER_RUN = _max_drafts_per_run()
 OUTREACH_STATUS_FIELD_CANDIDATES = ["Outreach Status"]
 NAME_FIELD_CANDIDATES = ["Business Name", "Practice Name", "Clinic Name", "Name"]
 EMAIL_FIELD_CANDIDATES = ["Email", "Contact Email"]
@@ -304,7 +315,7 @@ def _log_skip_details(lead: Dict[str, Any], reason: str) -> None:
     print(f"- Exact skip reason: {reason}")
 
 
-def query_new_leads(limit: int = MAX_LEADS_PER_RUN) -> List[Dict[str, Any]]:
+def query_new_leads(limit: int = MAX_DRAFTS_PER_RUN) -> List[Dict[str, Any]]:
     client = get_client()
     _, data_source_id = get_database_and_data_source()
     schema = get_data_source_schema()
@@ -617,7 +628,7 @@ def query_due_followups() -> List[Dict[str, Any]]:
             continue
         if outreach_status in {"Email 1 Sent", "Email 2 Sent"} and next_followup and today >= next_followup:
             due.append(lead)
-    return due[:MAX_LEADS_PER_RUN]
+    return due[:MAX_DRAFTS_PER_RUN]
 
 
 def _sequence_email_from_lead(lead: Dict[str, Any], step: str) -> Tuple[str, str]:
@@ -829,7 +840,7 @@ def main() -> None:
     summary = {
         "records_checked": 0,
         "eligible_records": 0,
-        "drafts_generated": 0,
+        "drafts_attempted": 0,
         "gmail_drafts_created": 0,
         "skipped_missing_email": 0,
         "skipped_missing_website": 0,
@@ -840,26 +851,26 @@ def main() -> None:
     }
 
     if args.mode in {"all", "email1"}:
-        leads = query_new_leads()
+        leads = query_new_leads(limit=MAX_DRAFTS_PER_RUN)
 
         if not leads:
             print("No eligible leads found.")
             print_no_eligible_lead_debug(schema)
         else:
-            for lead in leads[:MAX_LEADS_PER_RUN]:
+            for lead in leads[:MAX_DRAFTS_PER_RUN]:
                 summary["records_checked"] += 1
                 try:
                     result = _process_new_lead(schema, lead)
                     if result == "email_1_created":
                         summary["eligible_records"] += 1
-                        summary["drafts_generated"] += 1
+                        summary["drafts_attempted"] += 1
                         summary["gmail_drafts_created"] += 1
                     elif result == "sequence_saved":
                         summary["eligible_records"] += 1
-                        summary["drafts_generated"] += 1
+                        summary["drafts_attempted"] += 1
                     elif result == "dry_run_email_1":
                         summary["eligible_records"] += 1
-                        summary["drafts_generated"] += 1
+                        summary["drafts_attempted"] += 1
                     elif result == "skipped_missing_email":
                         summary["skipped_missing_email"] += 1
                     elif result == "skipped_missing_website":
@@ -881,7 +892,7 @@ def main() -> None:
         if not due_followups:
             print("No due follow-up drafts found.")
         else:
-            for lead in due_followups[:MAX_LEADS_PER_RUN]:
+            for lead in due_followups[:MAX_DRAFTS_PER_RUN]:
                 try:
                     result = _process_due_followup(schema, lead)
                     if result == "email_2_created":
@@ -893,6 +904,7 @@ def main() -> None:
                     print(f"Error creating follow-up for {_get_lead_name(lead)}: {exc}")
 
     print("Draft Agent Summary:")
+    print(f"- cap reached: {'yes' if summary['records_checked'] >= MAX_DRAFTS_PER_RUN else 'no'}")
     for key, value in summary.items():
         print(f"- {key}: {value}")
 
