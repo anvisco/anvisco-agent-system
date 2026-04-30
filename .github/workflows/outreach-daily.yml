@@ -1,9 +1,9 @@
 name: Outreach Daily
 
 on:
-  schedule:
-    - cron: "0 14 * * 1-5"
   workflow_dispatch:
+  schedule:
+    - cron: '0 14 * * 1-5'
 
 permissions:
   contents: read
