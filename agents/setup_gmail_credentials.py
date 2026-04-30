@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
-REQUIRED_KEYS = {"installed", "client_id", "client_secret", "auth_uri", "token_uri"}
+CLIENT_TYPES = ("installed", "desktop")
+REQUIRED_CLIENT_KEYS = {"client_id", "client_secret", "auth_uri", "token_uri"}
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DOWNLOADS_DIR = Path.home() / "Downloads"
 TARGET_DIR = PROJECT_ROOT / "credentials"
@@ -23,14 +24,41 @@ def is_valid_google_oauth_file(path: Path) -> bool:
     except (OSError, json.JSONDecodeError):
         return False
 
-    if "installed" not in data:
+    return _has_oauth_desktop_client(data)
+
+
+def _has_oauth_desktop_client(data: Dict[str, Any]) -> bool:
+    for client_type in CLIENT_TYPES:
+        client = data.get(client_type)
+        if isinstance(client, dict) and REQUIRED_CLIENT_KEYS.issubset(client.keys()):
+            return True
+    return False
+
+
+def _load_valid_source(source: Path) -> bool:
+    if not source.exists():
+        print(f"Source path used: {source}")
+        print("Source file does not exist.")
         return False
 
-    installed = data.get("installed")
-    if not isinstance(installed, dict):
+    if not source.is_file():
+        print(f"Source path used: {source}")
+        print("Source path is not a file.")
         return False
 
-    return REQUIRED_KEYS.issubset({"installed", *installed.keys()})
+    try:
+        data: Dict[str, Any] = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Source path used: {source}")
+        print(f"Source file is not valid JSON: {exc}")
+        return False
+
+    if not _has_oauth_desktop_client(data):
+        print(f"Source path used: {source}")
+        print("Source file is not a Google OAuth Desktop App JSON file.")
+        return False
+
+    return True
 
 
 def find_candidates() -> List[Path]:
@@ -64,21 +92,40 @@ def _backup_path() -> Path:
 
 
 def copy_credentials(source: Path) -> bool:
+    print(f"Source path used: {source}")
+    print(f"Target exists: {'yes' if TARGET_FILE.exists() else 'no'}")
+
+    if not _load_valid_source(source):
+        print("Copied: no")
+        print("Backup created: no")
+        print("Download a Google OAuth Desktop App JSON file and place it at credentials/gmail_credentials.json")
+        return False
+
     TARGET_DIR.mkdir(parents=True, exist_ok=True)
+
+    if TARGET_FILE.exists() and source.resolve() == TARGET_FILE.resolve():
+        print("Source and target are the same file; no copy needed")
+        print("Copied: no")
+        print("Backup created: no")
+        return True
+
+    backup_created = False
     if TARGET_FILE.exists():
         try:
-            TARGET_FILE.unlink()
-            print("Deleted existing credentials file")
-        except OSError:
-            try:
-                TARGET_FILE.rename(_backup_path())
-                print("Renamed locked credentials file")
-            except OSError as exc:
-                print(f"Could not replace locked credentials file: {exc}")
-                print("Close any app using credentials/gmail_credentials.json, then run this script again.")
-                return False
+            TARGET_FILE.rename(_backup_path())
+            backup_created = True
+            print("Renamed locked credentials file")
+        except OSError as exc:
+            print(f"Could not back up existing credentials file: {exc}")
+            print("Close any app using credentials/gmail_credentials.json, then run this script again.")
+            print("Copied: no")
+            print("Backup created: no")
+            return False
+
     shutil.copy2(source, TARGET_FILE)
     print("Copied new credentials file")
+    print("Copied: yes")
+    print(f"Backup created: {'yes' if backup_created else 'no'}")
     return True
 
 
@@ -96,10 +143,16 @@ def main() -> None:
         for candidate in candidates:
             print(f"- {candidate}")
         print("Choose one manually, then copy it to credentials/gmail_credentials.json")
+        print("Copied: no")
+        print("Backup created: no")
         return
 
     print("No valid Google OAuth Desktop credentials file was found.")
-    print("Download OAuth Desktop App credentials from Google Cloud, then place the JSON at credentials/gmail_credentials.json")
+    print("Source path used: none")
+    print(f"Target exists: {'yes' if TARGET_FILE.exists() else 'no'}")
+    print("Copied: no")
+    print("Backup created: no")
+    print("Download a Google OAuth Desktop App JSON file and place it at credentials/gmail_credentials.json")
 
 
 if __name__ == "__main__":
