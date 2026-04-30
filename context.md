@@ -4,7 +4,7 @@ Last updated: 2026-04-29
 
 ## Purpose
 
-Anvisco is Brian Nguyen's personal website service for local businesses. The current go-to-market focus is independent dental clinics in North York, Willowdale, and Toronto.
+Anvisco is Brian Nguyen's personal website service for local businesses. The current go-to-market focus is independent dental clinics across Toronto, North York, Willowdale, Scarborough, Etobicoke, Markham, Vaughan, Richmond Hill, Thornhill, Mississauga, Brampton, East York, York, Leaside, Midtown Toronto, and Downtown Toronto.
 
 The goal is to land the first paid website clients through practical website audits, short personalized outreach, and a credible portfolio at https://www.anvisco.com.
 
@@ -57,7 +57,7 @@ Avoid:
 Primary niche:
 
 - Independent dental clinics
-- North York / Willowdale / Toronto
+- Toronto-area dental clinics
 - Clinics with established practices, strong reviews, and websites with visible room for improvement
 
 Strong lead indicators:

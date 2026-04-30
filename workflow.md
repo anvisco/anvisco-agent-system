@@ -26,7 +26,7 @@ Goal: find and prepare 10-20 quality dental leads per day.
 
 Flow:
 
-1. Find dental clinics in North York, Willowdale, and nearby Toronto areas.
+1. Find dental clinics using rotated Toronto-area locations and query variations.
 2. De-duplicate against Notion by website, email, phone, and practice name.
 3. Visit the clinic website.
 4. Extract useful public information.

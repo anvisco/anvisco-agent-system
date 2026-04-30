@@ -15,7 +15,8 @@ GOOGLE_PLACES_API_KEY=
 PAGESPEED_API_KEY=
 OPENAI_API_KEY=
 LEAD_SCRAPER_NICHE=dental clinic
-LEAD_SCRAPER_LOCATIONS=Toronto, North York, Willowdale
+LEAD_SCRAPER_LOCATIONS=Toronto, North York, Willowdale, Scarborough, Etobicoke, Markham, Vaughan, Richmond Hill, Thornhill, Mississauga, Brampton, East York, York, Leaside, Midtown Toronto, Downtown Toronto
+LEAD_SCRAPER_QUERIES=dental clinic, dentist, cosmetic dentist, family dentist, dental office
 MAX_NEW_LEADS_PER_RUN=15
 MAX_PLACES_RESULTS_PER_LOCATION=20
 MAX_TOTAL_CANDIDATES=60
@@ -41,7 +42,7 @@ python agents/run_lead_scraper.py
 
 ## Flow
 
-1. Search Google Places for dental clinics in the configured locations.
+1. Search Google Places using the configured location and query rotation.
 2. Skip records with no website.
 3. Normalize domains for deduplication.
 4. Check existing Notion records by domain, email, phone, then business name plus city.

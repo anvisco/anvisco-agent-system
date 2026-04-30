@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import requests
 
 from .config import settings
 from .models import FoundLead
+from .logger import DailyLogger
 from .utils import clean_phone, normalize_domain
 
 
@@ -97,6 +99,27 @@ def _display_name(place: Dict[str, Any]) -> str:
     return ""
 
 
+def _today_rotation_offset(length: int) -> int:
+    if length <= 0:
+        return 0
+    return datetime.now(timezone.utc).toordinal() % length
+
+
+def _rotate(items: list[str], offset: int) -> list[str]:
+    if not items:
+        return []
+    offset %= len(items)
+    return items[offset:] + items[:offset]
+
+
+def _build_search_plan() -> list[tuple[str, str]]:
+    locations = _rotate(settings.locations, _today_rotation_offset(len(settings.locations)))
+    queries = _rotate(settings.query_variations, _today_rotation_offset(len(settings.query_variations)) + 1)
+    if not locations or not queries:
+        return []
+    return [(location, queries[index % len(queries)]) for index, location in enumerate(locations)]
+
+
 def _dedupe_key(place: Dict[str, Any], location: str) -> tuple[str, str]:
     place_id = place.get("id", "")
     if place_id:
@@ -131,23 +154,36 @@ def _to_found_lead(place: Dict[str, Any], location: str) -> FoundLead:
     )
 
 
-def find_local_leads() -> List[FoundLead]:
+def find_local_leads(logger: DailyLogger | None = None) -> List[FoundLead]:
     if not settings.google_places_api_key:
         raise ValueError("GOOGLE_PLACES_API_KEY is missing.")
 
     found: List[FoundLead] = []
     seen_keys: set[tuple[str, str]] = set()
 
-    for location in settings.locations:
-        query = f"{settings.niche} in {location}"
+    search_plan = _build_search_plan()
+    for location, query_term in search_plan:
+        query = f"{query_term} in {location}"
+        if logger:
+            logger.event(f"Location used: {location}")
+            logger.event(f"Query used: {query_term}")
         places = _search_places_new(query)
+        duplicates_skipped = 0
+        if logger:
+            logger.count("candidates_found", len(places))
+            logger.event(f"Candidates found: {len(places)}")
 
         for place in places:
             if len(found) >= settings.max_total_candidates:
                 print(f"Total unique leads found: {len(found)}")
+                if logger:
+                    logger.event(f"MAX_TOTAL_CANDIDATES reached: {settings.max_total_candidates}")
                 return found
             dedupe_key = _dedupe_key(place, location)
             if dedupe_key in seen_keys:
+                duplicates_skipped += 1
+                if logger:
+                    logger.count("duplicates_skipped")
                 continue
             seen_keys.add(dedupe_key)
 
@@ -160,6 +196,10 @@ def find_local_leads() -> List[FoundLead]:
                 continue
 
             found.append(_to_found_lead(place, location))
+
+        if logger:
+            logger.event(f"Duplicates skipped: {duplicates_skipped}")
+            logger.event(f"Unique leads kept so far: {len(found)}")
 
     print(f"Total unique leads found: {len(found)}")
     return found

@@ -32,6 +32,7 @@ class ScraperSettings:
     openai_api_key: str
     niche: str
     locations: list[str]
+    query_variations: list[str]
     max_new_leads_per_run: int
     max_places_results_per_location: int
     max_total_candidates: int
@@ -56,6 +57,11 @@ def _max_new_leads_per_run() -> int:
     return _bounded_int(configured, 1, 50)
 
 
+def _parse_csv_env(name: str, default: str) -> list[str]:
+    raw = os.getenv(name, default)
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 settings = ScraperSettings(
     notion_api_key=os.getenv("NOTION_API_KEY", "").strip(),
     notion_database_id=os.getenv("NOTION_DATABASE_ID", "").strip(),
@@ -63,11 +69,14 @@ settings = ScraperSettings(
     pagespeed_api_key=os.getenv("PAGESPEED_API_KEY", "").strip(),
     openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
     niche=os.getenv("LEAD_SCRAPER_NICHE", "dental clinic").strip(),
-    locations=[
-        item.strip()
-        for item in os.getenv("LEAD_SCRAPER_LOCATIONS", "Toronto, North York, Willowdale").split(",")
-        if item.strip()
-    ],
+    locations=_parse_csv_env(
+        "LEAD_SCRAPER_LOCATIONS",
+        "Toronto, North York, Willowdale, Scarborough, Etobicoke, Markham, Vaughan, Richmond Hill, Thornhill, Mississauga, Brampton, East York, York, Leaside, Midtown Toronto, Downtown Toronto",
+    ),
+    query_variations=_parse_csv_env(
+        "LEAD_SCRAPER_QUERIES",
+        "dental clinic, dentist, cosmetic dentist, family dentist, dental office",
+    ),
     max_new_leads_per_run=_max_new_leads_per_run(),
     max_places_results_per_location=_bounded_int(_as_int(os.getenv("MAX_PLACES_RESULTS_PER_LOCATION"), 20), 1, 20),
     max_total_candidates=_bounded_int(_as_int(os.getenv("MAX_TOTAL_CANDIDATES"), 60), 1, 200),

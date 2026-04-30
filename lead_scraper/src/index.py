@@ -105,12 +105,11 @@ def run_daily_scrape() -> None:
         return
 
     try:
-        found_leads = find_local_leads()
+        found_leads = find_local_leads(logger)
         logger.count("total_found", len(found_leads))
         logger.event(f"Leads found from Google Places: {len(found_leads)}")
         if not found_leads:
-            for location in settings.locations:
-                logger.event(f"Google Places returned 0 leads for query/location: {settings.niche} in {location}")
+            logger.event("Google Places returned 0 leads for the current rotated query/location plan")
     except Exception as exc:
         logger.error("Lead Finder", str(exc))
         logger.write()
@@ -177,6 +176,7 @@ def run_daily_scrape() -> None:
                 page_id = write_new_lead(audited, schema_properties, data_source_id)
                 logger.count("new_inserted")
                 logger.event(f"Inserted new lead: {audited.business_name} ({page_id})")
+                logger.event(f"New leads inserted: {logger.counters.get('new_inserted', 0)}")
 
             accepted_count += 1
         except Exception as exc:
