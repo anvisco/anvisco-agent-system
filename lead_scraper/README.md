@@ -18,6 +18,7 @@ LEAD_SCRAPER_NICHE=dental clinic
 LEAD_SCRAPER_LOCATIONS=Toronto, North York, Willowdale, Scarborough, Etobicoke, Markham, Vaughan, Richmond Hill, Thornhill, Mississauga, Brampton, East York, York, Leaside, Midtown Toronto, Downtown Toronto
 LEAD_SCRAPER_QUERIES=dental clinic, dentist, cosmetic dentist, family dentist, dental office
 MAX_NEW_LEADS_PER_RUN=15
+MIN_DRAFTS_TARGET=15
 MAX_PLACES_RESULTS_PER_LOCATION=20
 MAX_TOTAL_CANDIDATES=60
 SCRAPER_REQUEST_TIMEOUT_SECONDS=12

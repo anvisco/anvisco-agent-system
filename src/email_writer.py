@@ -201,6 +201,7 @@ def generate_email_sequence(lead: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     return {
+        "top_issue": top_issue,
         "angle_bucket": angle_bucket,
         "loom_recommended": loom_recommended,
         "loom_script": _loom_script(angle_bucket) if loom_recommended else "",
