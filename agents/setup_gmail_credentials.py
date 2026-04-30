@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, List
 
 
-CLIENT_TYPES = ("installed", "desktop")
+CLIENT_TYPES = ("installed", "web")
 REQUIRED_CLIENT_KEYS = {"client_id", "client_secret", "auth_uri", "token_uri"}
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DOWNLOADS_DIR = Path.home() / "Downloads"
@@ -20,14 +20,22 @@ def is_valid_google_oauth_file(path: Path) -> bool:
         return False
 
     try:
-        data: Dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        data: Any = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        print(f"Skipping invalid JSON candidate: {path}")
+        return False
+
+    if not isinstance(data, dict):
+        print(f"Skipping invalid JSON candidate: {path}")
         return False
 
     return _has_oauth_desktop_client(data)
 
 
-def _has_oauth_desktop_client(data: Dict[str, Any]) -> bool:
+def _has_oauth_desktop_client(data: Any) -> bool:
+    if not isinstance(data, dict):
+        return False
+
     for client_type in CLIENT_TYPES:
         client = data.get(client_type)
         if isinstance(client, dict) and REQUIRED_CLIENT_KEYS.issubset(client.keys()):
@@ -47,10 +55,15 @@ def _load_valid_source(source: Path) -> bool:
         return False
 
     try:
-        data: Dict[str, Any] = json.loads(source.read_text(encoding="utf-8"))
+        data: Any = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         print(f"Source path used: {source}")
         print(f"Source file is not valid JSON: {exc}")
+        return False
+
+    if not isinstance(data, dict):
+        print(f"Source path used: {source}")
+        print("Source file is not a Google OAuth Desktop App JSON file.")
         return False
 
     if not _has_oauth_desktop_client(data):
