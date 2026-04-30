@@ -198,6 +198,23 @@ def _add_update(
         updates[property_name] = update_value
 
 
+def _add_update_if_empty(
+    updates: Dict[str, Any],
+    schema_properties: Dict[str, Any],
+    lead: Dict[str, Any],
+    candidates: List[str],
+    value: Any,
+) -> None:
+    property_name = _first_existing_property_name(schema_properties, candidates)
+    if not property_name:
+        return
+    if _get_text_value(_get_property(lead, property_name)):
+        return
+    update_value = _property_update(schema_properties[property_name].get("type"), value)
+    if update_value:
+        updates[property_name] = update_value
+
+
 def _append_scrape_note_update(schema: Dict[str, Any], lead: Dict[str, Any], note: str) -> Dict[str, Any]:
     schema_properties = schema.get("properties", {})
     scrape_notes_property = _first_existing_property_name(schema_properties, SCRAPE_NOTES_CANDIDATES)
@@ -446,8 +463,8 @@ def build_email_1_sequence_updates(
     updates: Dict[str, Any] = {}
 
     emails = sequence["emails"]
-    _add_update(updates, properties, EMAIL_1_SUBJECT_CANDIDATES, emails["email_1"]["subject"])
-    _add_update(updates, properties, EMAIL_1_DRAFT_CANDIDATES, emails["email_1"]["body"])
+    _add_update_if_empty(updates, properties, lead, EMAIL_1_SUBJECT_CANDIDATES, emails["email_1"]["subject"])
+    _add_update_if_empty(updates, properties, lead, EMAIL_1_DRAFT_CANDIDATES, emails["email_1"]["body"])
     _add_update(updates, properties, EMAIL_2_SUBJECT_CANDIDATES, emails["email_2"]["subject"])
     _add_update(updates, properties, EMAIL_2_DRAFT_CANDIDATES, emails["email_2"]["body"])
     _add_update(updates, properties, EMAIL_3_SUBJECT_CANDIDATES, emails["email_3"]["subject"])
