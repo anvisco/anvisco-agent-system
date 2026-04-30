@@ -53,7 +53,13 @@ def _angle_bucket(top_issue: str, scraped: ScrapedWebsite) -> str:
 
 
 def score_lead(found: FoundLead, scraped: ScrapedWebsite, top_issue: str) -> int:
+    has_contact_method = bool(scraped.email or scraped.phone or found.phone)
+    has_valid_website = bool(scraped.website_url or found.website)
+    has_clear_issue = bool(top_issue and top_issue.strip())
+
     score = 2
+    if has_valid_website and has_contact_method and has_clear_issue:
+        score = 3
     if scraped.email:
         score += 1
     if scraped.issue_signals:

@@ -262,6 +262,15 @@ def _missing_email_1_fields(lead: Dict[str, Any], angle_bucket: str) -> List[str
     return missing
 
 
+def _has_required_outreach_fields(lead: Dict[str, Any], angle_bucket: str) -> bool:
+    return not _missing_email_1_fields(lead, angle_bucket)
+
+
+def _score_allows_draft(lead: Dict[str, Any], angle_bucket: str) -> bool:
+    score = _lead_quality_score(lead)
+    return score >= 3 or _has_required_outreach_fields(lead, angle_bucket)
+
+
 def _has_duplicate_draft_for_step(lead: Dict[str, Any], target_step: str) -> bool:
     properties = lead.get("properties", {})
     sequence_step_property = _first_existing_property_name(properties, SEQUENCE_STEP_CANDIDATES)
@@ -370,6 +379,9 @@ def print_no_eligible_lead_debug(schema: Dict[str, Any]) -> None:
         "eligible": 0,
         "status": 0,
         "email": 0,
+        "website": 0,
+        "top_issue": 0,
+        "angle_bucket": 0,
         "do_not_contact": 0,
     }
     skipped: List[Tuple[str, str, str, str]] = []
@@ -380,6 +392,15 @@ def print_no_eligible_lead_debug(schema: Dict[str, Any]) -> None:
         email_value = _get_property(lead, email_property or "").get("email") or _get_text_value(
             _get_property(lead, email_property or "")
         )
+        website_value = _get_text_value(
+            _get_property(lead, _first_existing_property_name(lead.get("properties", {}), WEBSITE_CANDIDATES) or "")
+        )
+        top_issue_value = _get_text_value(
+            _get_property(lead, _first_existing_property_name(lead.get("properties", {}), TOP_ISSUE_CANDIDATES) or "")
+        )
+        angle_bucket_value = _get_text_value(
+            _get_property(lead, _first_existing_property_name(lead.get("properties", {}), ANGLE_BUCKET_CANDIDATES) or "")
+        )
         do_not_contact = _get_checkbox_value(_get_property(lead, dnc_property or ""))
 
         reason = ""
@@ -389,6 +410,15 @@ def print_no_eligible_lead_debug(schema: Dict[str, Any]) -> None:
         elif not email_value:
             counts["email"] += 1
             reason = f"{email_property or 'Email'} was missing"
+        elif not website_value:
+            counts["website"] += 1
+            reason = "Website was missing"
+        elif not top_issue_value:
+            counts["top_issue"] += 1
+            reason = "Top Issue was missing"
+        elif not angle_bucket_value:
+            counts["angle_bucket"] += 1
+            reason = "Angle Bucket was missing"
         elif do_not_contact:
             counts["do_not_contact"] += 1
             reason = f"{dnc_property or 'Do Not Contact'} was true"
@@ -402,6 +432,9 @@ def print_no_eligible_lead_debug(schema: Dict[str, Any]) -> None:
     print(f"Number eligible: {counts['eligible']}")
     print(f"Number skipped because Outreach Status is not New Lead: {counts['status']}")
     print(f"Number skipped because Email is missing: {counts['email']}")
+    print(f"Number skipped because Website is missing: {counts['website']}")
+    print(f"Number skipped because Top Issue is missing: {counts['top_issue']}")
+    print(f"Number skipped because Angle Bucket is missing: {counts['angle_bucket']}")
     print(f"Number skipped because Do Not Contact / status is Do Not Contact: {counts['do_not_contact']}")
     print("Skipped leads:")
     for lead_name, outreach_status, email, reason in skipped:
@@ -606,14 +639,19 @@ def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
         _handle_missing_required_fields(schema, lead, ["Email"])
         return "skipped"
 
-    if _lead_quality_score(lead) < 3:
-        print(f"Skipped {lead_name}: Lead Quality Score is below 3")
-        return "skipped"
-
     missing = _missing_email_1_fields(lead, sequence["angle_bucket"])
     if missing:
         _handle_missing_required_fields(schema, lead, missing)
         return "skipped"
+
+    score = _lead_quality_score(lead)
+    if not _score_allows_draft(lead, sequence["angle_bucket"]):
+        print(
+            f"Skipped {lead_name}: Lead Quality Score is {score}, and required outreach fields are incomplete"
+        )
+        return "skipped"
+    if score < 3:
+        print(f"Allowing {lead_name}: Lead Quality Score is {score}, but required outreach fields are present")
 
     email_1 = sequence["emails"]["email_1"]
 
