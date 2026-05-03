@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from notion_client import Client
 
 from .config import settings
 from .models import AuditedLead
+from src.lead_pipeline import DRAFT_READY_STATUSES, STOPPED_STATUSES
 from .utils import append_note, clean_phone, is_probably_better_text, normalize_domain, now_iso_date
 
 
 CONTACTED_OR_CLOSED = {
+    *STOPPED_STATUSES,
     "Email 1 Sent",
     "Email 2 Sent",
     "Replied",
@@ -20,16 +22,26 @@ CONTACTED_OR_CLOSED = {
     "Do Not Contact",
     "Closed",
 }
-EARLY_STAGE = {"New Lead", "Draft Ready"}
+EARLY_STAGE = {
+    *DRAFT_READY_STATUSES,
+    "New Lead",
+    "Draft Ready",
+    "new",
+    "researching",
+}
 SOURCE_GOOGLE_PLACES_NEW = "Google Places New"
 
 
 FIELD_MAP = {
     "Google Place ID": "google_place_id",
     "Business Name": "business_name",
+    "Contact Name": "contact_name",
     "Niche": "niche",
+    "Industry": "industry",
     "City": "city",
+    "Location": "location",
     "Website": "website",
+    "Website URL": "website_url",
     "Domain": "domain",
     "Email": "email",
     "Phone": "phone",
@@ -44,13 +56,20 @@ FIELD_MAP = {
     "Lead Quality Score": "lead_quality_score",
     "Website Status": "website_status",
     "Source": "source",
+    "Lead Source": "lead_source",
+    "Lead Status": "lead_status",
+    "Audit Status": "audit_status",
     "Last Scraped Date": None,
     "Scrape Notes": "scrape_notes",
-    "Outreach Status": None,
+    "Notes": "notes",
+    "Created At": "created_at",
+    "Updated At": "updated_at",
+    "Outreach Status": "lead_status",
     "Contact Page URL": "contact_page_url",
     "Booking URL": "booking_url",
     "Languages": "languages",
     "Services": "services",
+    "Intent Level": "intent_level",
 }
 
 
@@ -240,16 +259,19 @@ def should_skip_recent_good_record(page: Dict[str, Any]) -> bool:
 def _build_create_properties(audited: AuditedLead, schema_properties: Dict[str, Any]) -> Dict[str, Any]:
     props: Dict[str, Any] = {}
     title_property = _title_property(schema_properties)
+    now_iso = datetime.now(timezone.utc).isoformat()
     for notion_field, attr in FIELD_MAP.items():
         if notion_field not in schema_properties and notion_field != "Business Name":
             continue
         value = getattr(audited, attr) if attr else None
         if notion_field == "Business Name":
             value = audited.business_name
+        elif notion_field == "Created At":
+            value = audited.created_at or now_iso
+        elif notion_field == "Updated At":
+            value = audited.updated_at or now_iso
         elif notion_field == "Last Scraped Date":
             value = now_iso_date()
-        elif notion_field == "Outreach Status":
-            value = "New Lead"
         property_name = title_property if notion_field == "Business Name" and title_property != notion_field else notion_field
         prop_info = schema_properties.get(property_name)
         if not prop_info:
@@ -266,6 +288,7 @@ def _build_update_properties(page: Dict[str, Any], audited: AuditedLead, schema_
     existing_props = page.get("properties", {})
     updates: Dict[str, Any] = {}
     title_property = _title_property(schema_properties)
+    now_iso = datetime.now(timezone.utc).isoformat()
     for notion_field, attr in FIELD_MAP.items():
         if notion_field not in schema_properties and notion_field != "Business Name":
             continue
@@ -275,13 +298,15 @@ def _build_update_properties(page: Dict[str, Any], audited: AuditedLead, schema_
         property_name = title_property if notion_field == "Business Name" and title_property != notion_field else notion_field
         if notion_field == "Last Scraped Date":
             incoming = now_iso_date()
+        if notion_field == "Updated At":
+            incoming = audited.updated_at or now_iso
         if notion_field == "Scrape Notes":
             current = _plain_text(existing_props.get(property_name, {}))
             incoming = append_note(current, audited.scrape_notes)
         current = _plain_text(existing_props.get(property_name, {}))
         if notion_field in {"Top Issue", "Outreach Angle"} and not is_probably_better_text(current, str(incoming or "")):
             continue
-        elif notion_field not in {"Top Issue", "Outreach Angle", "Last Scraped Date", "Scrape Notes"} and current:
+        elif notion_field not in {"Top Issue", "Outreach Angle", "Last Scraped Date", "Scrape Notes", "Updated At"} and current:
             continue
         notion_value = _property_value(schema_properties[property_name]["type"], incoming)
         if notion_value:

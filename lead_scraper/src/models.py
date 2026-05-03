@@ -62,6 +62,18 @@ class AuditedLead:
     website_status: str
     source: str
     scrape_notes: str
+    contact_name: str = ""
+    website_url: str = ""
+    industry: str = ""
+    location: str = ""
+    lead_source: str = ""
+    lead_status: str = ""
+    audit_status: str = ""
+    outreach_status: str = ""
+    intent_level: str = ""
+    notes: str = ""
+    created_at: str = ""
+    updated_at: str = ""
     contact_page_url: str = ""
     booking_url: str = ""
     languages: str = ""

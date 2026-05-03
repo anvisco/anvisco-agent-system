@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, Optional
 from notion_client import Client
 
 from src.config import settings
+from src.lead_pipeline import DRAFT_READY_STATUSES, status_matches
 from src.notion_client import get_database_and_data_source, get_data_source_schema
 
 
@@ -118,14 +119,15 @@ def main() -> None:
     if missing_schema_fields:
         print(f"Missing schema fields: {', '.join(missing_schema_fields)}")
 
-    new_lead_count = 0
-    valid_new_lead_count = 0
+    draft_ready_count = 0
+    valid_draft_ready_count = 0
     skipped_count = 0
     for page in pages:
-        status = _text(page.get("properties", {}).get("Outreach Status", {}))
-        if status != "New Lead":
+        properties = page.get("properties", {})
+        status = _text(properties.get("Lead Status", {}) or properties.get("Outreach Status", {}))
+        if not status_matches(status, *DRAFT_READY_STATUSES):
             continue
-        new_lead_count += 1
+        draft_ready_count += 1
         name = _field_value(page, "Business Name", title_property) or page["id"]
         missing = [field for field in REQUIRED_FOR_DRAFT if not _field_value(page, field, title_property)]
         if _score(page) < 3:
@@ -134,10 +136,10 @@ def main() -> None:
             skipped_count += 1
             print(f"SKIP | {name} | missing/invalid: {', '.join(missing)}")
             continue
-        valid_new_lead_count += 1
+        valid_draft_ready_count += 1
 
-    print(f"New Lead records: {new_lead_count}")
-    print(f"Valid New Lead records: {valid_new_lead_count}")
+    print(f"Draft-ready records: {draft_ready_count}")
+    print(f"Valid draft-ready records: {valid_draft_ready_count}")
     print(f"Records skipped by validation: {skipped_count}")
 
     duplicate_count = 0

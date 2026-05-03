@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from .models import AuditedLead, FoundLead, ScrapedWebsite
+from src.lead_pipeline import intent_level_from_score
 
 
 def _top_issue(scraped: ScrapedWebsite) -> str:
@@ -90,6 +93,7 @@ def audit_lead(found: FoundLead, scraped: ScrapedWebsite) -> AuditedLead:
         "Position the redesign as a patient-conversion system that simplifies booking, improves trust, "
         "and turns more website visitors into consultations."
     )
+    updated_at = datetime.now(timezone.utc).isoformat()
 
     return AuditedLead(
         google_place_id=found.google_place_id,
@@ -112,6 +116,17 @@ def audit_lead(found: FoundLead, scraped: ScrapedWebsite) -> AuditedLead:
         website_status=scraped.website_status,
         source=found.source,
         scrape_notes="\n".join(notes),
+        contact_name=scraped.dentist_or_owner_name,
+        website_url=scraped.website_url or found.website,
+        industry="Dental",
+        location=found.city,
+        lead_source=found.source,
+        lead_status="audit_ready",
+        audit_status="complete",
+        outreach_status="not_started",
+        intent_level=intent_level_from_score(score),
+        notes="\n".join(notes),
+        updated_at=updated_at,
         contact_page_url=scraped.contact_page_url,
         booking_url=scraped.booking_url,
         languages=", ".join(scraped.languages),

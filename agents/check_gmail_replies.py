@@ -12,13 +12,14 @@ from notion_client import Client
 from src.config import settings
 from src.gmail_client import get_profile_email, get_thread, search_messages
 from src.notion_client import get_database_and_data_source, get_data_source_schema
+from src.lead_pipeline import ACTIVE_OUTREACH_STATUSES, STOPPED_STATUSES, status_matches
 
 
-ACTIVE_SENT_STATUSES = {"Email 1 Sent", "Email 2 Sent"}
-STOP_STATUSES = {"Replied", "Closed", "Call Booked", "Not Interested", "Do Not Contact"}
+ACTIVE_SENT_STATUSES = {"Email 1 Sent", "Email 2 Sent", *ACTIVE_OUTREACH_STATUSES}
+STOP_STATUSES = {"Replied", "Closed", "Call Booked", "Not Interested", "Do Not Contact", "No Response", *STOPPED_STATUSES}
 NAME_CANDIDATES = ("Business Name", "Practice Name", "Clinic Name", "Name")
 EMAIL_CANDIDATES = ("Email", "Contact Email")
-OUTREACH_STATUS_CANDIDATES = ("Outreach Status",)
+OUTREACH_STATUS_CANDIDATES = ("Lead Status", "Outreach Status")
 REPLY_STATUS_CANDIDATES = ("Reply Status",)
 GMAIL_THREAD_ID_CANDIDATES = ("Gmail Thread ID",)
 LAST_OUTREACH_DATE_CANDIDATES = ("Last Outreach Date", "Email 1 Date")
@@ -145,9 +146,9 @@ def _search_has_reply_from_lead(lead_email: str, last_outreach: Optional[date]) 
 
 def _build_reply_updates(schema_properties: Dict[str, Any]) -> Dict[str, Any]:
     updates: Dict[str, Any] = {}
-    _add_update(updates, schema_properties, REPLY_STATUS_CANDIDATES, "Replied")
-    _add_update(updates, schema_properties, OUTREACH_STATUS_CANDIDATES, "Replied")
-    _add_update(updates, schema_properties, SEQUENCE_STEP_CANDIDATES, "Replied")
+    _add_update(updates, schema_properties, REPLY_STATUS_CANDIDATES, "replied")
+    _add_update(updates, schema_properties, OUTREACH_STATUS_CANDIDATES, "replied")
+    _add_update(updates, schema_properties, SEQUENCE_STEP_CANDIDATES, "replied")
     return updates
 
 
@@ -177,10 +178,10 @@ def main() -> None:
 
             outreach_status = _text(properties.get(status_field or "", {}))
             reply_status = _text(properties.get(reply_field or "", {}))
-            if outreach_status in STOP_STATUSES or reply_status == "Replied":
+            if status_matches(outreach_status, *STOP_STATUSES) or status_matches(reply_status, "replied"):
                 summary["skipped"] += 1
                 continue
-            if outreach_status not in ACTIVE_SENT_STATUSES:
+            if not status_matches(outreach_status, *ACTIVE_SENT_STATUSES):
                 summary["skipped"] += 1
                 continue
 
