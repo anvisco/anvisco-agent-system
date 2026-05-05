@@ -155,6 +155,29 @@ def _extract_social_links(soup: BeautifulSoup) -> list[str]:
     return sorted(set(links))
 
 
+def _has_schema_type(soup: BeautifulSoup, schema_types: tuple[str, ...]) -> bool:
+    for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        text = script.get_text(" ", strip=True).lower()
+        if any(schema_type in text for schema_type in schema_types):
+            return True
+    return False
+
+
+def _has_map_or_location_signal(text: str, soup: BeautifulSoup) -> bool:
+    lower = text.lower()
+    if any(keyword in lower for keyword in ("google maps", "map", "maps", "directions", "find us", "location")):
+        return True
+    for anchor in soup.find_all("a", href=True):
+        href = anchor["href"].lower()
+        if "maps.google" in href or "google.com/maps" in href:
+            return True
+    for iframe in soup.find_all("iframe", src=True):
+        src = iframe["src"].lower()
+        if "maps.google" in src or "google.com/maps" in src:
+            return True
+    return False
+
+
 def _detect_issue_signals(text: str, soup: BeautifulSoup, booking_url: str) -> list[str]:
     lower = text.lower()
     cta_words = sum(lower.count(word) for word in ("book", "call", "contact", "request", "schedule"))
@@ -172,6 +195,12 @@ def _detect_issue_signals(text: str, soup: BeautifulSoup, booking_url: str) -> l
         signals.append("high-value services could be framed more clearly")
     if not soup.find("meta", attrs={"name": "viewport"}):
         signals.append("weak mobile layout")
+    if not any(keyword in lower for keyword in ("review", "reviews", "testimonial", "testimonials", "trusted", "since ", "years")):
+        signals.append("weak trust signals")
+    if not _has_map_or_location_signal(text, soup):
+        signals.append("weak local discovery signals")
+    if ("faq" in lower or "frequently asked questions" in lower) and not _has_schema_type(soup, ("faqpage",)):
+        signals.append("faq/schema readiness is missing")
     if not any(keyword in lower for keyword in LANGUAGE_KEYWORDS):
         signals.append("no multilingual support mentioned")
     if "contact" not in lower and not booking_url:
@@ -232,5 +261,9 @@ def scrape_website(found: FoundLead) -> ScrapedWebsite:
     scraped.languages = sorted({keyword.title() for keyword in LANGUAGE_KEYWORDS if keyword in all_text.lower()})
     scraped.services = sorted({keyword.title() for keyword in SERVICE_KEYWORDS if keyword in all_text.lower()})
     scraped.issue_signals = _detect_issue_signals(all_text, soup, scraped.booking_url)
+    if not scraped.https_active:
+        scraped.issue_signals.append("https trust signal is weak")
+    if scraped.website_status == "slow":
+        scraped.issue_signals.append("slow website experience")
 
     return scraped

@@ -50,9 +50,14 @@ FIELD_MAP = {
     "Rating": "rating",
     "Review Count": "review_count",
     "Top Issue": "top_issue",
+    "Top 3 Issues": "top_3_issues",
+    "Business Impact": "business_impact",
+    "Recommended Fix": "recommended_fix",
     "Outreach Angle": "outreach_angle",
+    "Email Angle": "email_angle",
     "Angle Bucket": "angle_bucket",
     "Recommended Offer": "recommended_offer",
+    "Loom Script": "loom_script",
     "Lead Quality Score": "lead_quality_score",
     "Website Status": "website_status",
     "Source": "source",
@@ -116,6 +121,10 @@ def _plain_text(value: Dict[str, Any]) -> str:
 def _property_value(prop_type: str, value: Any) -> Optional[Dict[str, Any]]:
     if value is None or value == "":
         return None
+    if isinstance(value, (list, tuple)):
+        value = "\n".join(f"- {item}" for item in value if str(item).strip())
+        if not value:
+            return None
     if prop_type == "title":
         return {"title": [{"type": "text", "text": {"content": str(value)}}]}
     if prop_type == "rich_text":

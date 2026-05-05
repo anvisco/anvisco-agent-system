@@ -78,3 +78,8 @@ class AuditedLead:
     booking_url: str = ""
     languages: str = ""
     services: str = ""
+    top_3_issues: list[str] = field(default_factory=list)
+    business_impact: str = ""
+    recommended_fix: str = ""
+    email_angle: str = ""
+    loom_script: str = ""
