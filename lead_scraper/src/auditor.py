@@ -8,20 +8,36 @@ def _top_issue(scraped: ScrapedWebsite) -> str:
     signals = scraped.issue_signals
     if "no booking funnel" in signals:
         return "The website has no clear booking funnel, so visitors are pushed toward phone or email instead of a guided patient flow."
+    if "too many CTAs" in signals:
+        return "The website has too many competing calls to action, so visitors may not know which next step matters."
     if "trust signals are thin" in signals:
         return "The website does not surface enough trust signals early, which can make patients hesitate before booking."
+    if "weak trust signals" in signals:
+        return "The website does not surface enough trust proof early, which can make patients hesitate before booking."
     if "local discovery signals are thin" in signals:
+        return "The website does not clearly support local discovery, so nearby patients may not immediately see why this clinic is relevant."
+    if "weak local discovery signals" in signals:
         return "The website does not clearly support local discovery, so nearby patients may not immediately see why this clinic is relevant."
     if "faq/schema readiness is not obvious" in signals:
         return "The website does not make FAQ or schema readiness obvious, which can weaken scanability and search clarity."
+    if "faq/schema readiness is missing" in signals:
+        return "The website does not make FAQ or schema readiness obvious, which can weaken scanability and search clarity."
     if "weak mobile layout" in signals:
         return "The website appears to have a weak mobile layout, which can make it harder for patients to take action from their phone."
+    if "slow website experience" in signals:
+        return "The website feels slow enough to create friction before a patient reaches the booking step."
     if "too much content without structure" in signals:
         return "The website has a lot of content without enough structure, which can make services and next steps harder to scan."
     if "high-value services could be framed more clearly" in signals:
         return "High-value services are present, but they could be framed more clearly around patient trust and booking intent."
     if "no multilingual support mentioned" in signals:
         return "The website does not clearly mention multilingual support, which may matter for patients in the local area."
+    if "https trust signal is weak" in signals:
+        return "The website is missing a simple HTTPS trust signal that can affect confidence."
+    if "contact path is buried or missing" in signals:
+        return "The contact path is buried or missing, so ready visitors may not reach the next step."
+    if "outdated COVID messaging" in signals:
+        return "The website still carries outdated COVID messaging, which can weaken trust quickly."
     if signals:
         return f"The website shows a fixable conversion issue: {signals[0]}."
     return "The website has room to make the patient journey clearer and easier to act on."
@@ -31,7 +47,7 @@ def _recommended_offer(top_issue: str) -> str:
     lower = top_issue.lower()
     if any(keyword in lower for keyword in ("broken", "outdated", "low trust", "failed", "slow")):
         return "Full Build"
-    if any(keyword in lower for keyword in ("booking", "patient flow", "cta", "structure", "services", "faq", "mobile", "local discovery", "trust signals")):
+    if any(keyword in lower for keyword in ("booking", "patient flow", "cta", "structure", "services", "faq", "mobile", "local discovery", "trust signals", "trust proof", "https trust", "contact path")):
         return "Modules / Improvements"
     if any(keyword in lower for keyword in ("multilingual", "translation")):
         return "Full Website Audit"
@@ -125,6 +141,12 @@ def _business_impact(found: FoundLead, top_issue: str, angle_bucket: str) -> str
         return f"Patients in {city} who prefer another language may not feel fully comfortable moving forward."
     if angle_bucket == "Poor Content Structure":
         return f"If the site is hard to scan, the clinic can lose attention before visitors understand the strongest reasons to book."
+    if "local discovery" in top_issue.lower():
+        return f"Patients in {city} may not immediately see why the clinic is the relevant local choice when they search on Google or Maps."
+    if "faq/schema" in top_issue.lower():
+        return f"Without stronger structured answers, the clinic can miss opportunities to look clearer in search and AI-assisted discovery."
+    if "trust proof" in top_issue.lower() or "trust signals" in top_issue.lower():
+        return f"If trust proof is thin, patients comparing clinics in {city} may hesitate before they ever reach the booking step."
     return f"The site has room to make the patient journey clearer and easier to act on around {top_issue.lower()}."
 
 
@@ -139,6 +161,12 @@ def _recommended_fix(found: FoundLead, scraped: ScrapedWebsite, angle_bucket: st
         return "Make the key patient paths easier to understand for multilingual visitors."
     if angle_bucket == "Poor Content Structure":
         return "Restructure services, trust signals, and FAQs so the site scans faster."
+    if "local discovery" in angle_bucket.lower():
+        return "Surface the clinic's local presence more clearly with map, location, and nearby-search signals."
+    if "trust" in angle_bucket.lower():
+        return "Add clearer trust proof, reviews, and confidence signals near the main booking path."
+    if "faq" in angle_bucket.lower() or "schema" in angle_bucket.lower():
+        return "Add clearer FAQ structure and schema-friendly answers so the site is easier to scan."
     if scraped.services:
         return "Clarify the strongest services and make the booking flow easier to follow."
     return "Clean up the site structure so visitors can get to the right next step faster."
@@ -150,6 +178,8 @@ def _email_angle(found: FoundLead, angle_bucket: str) -> str:
         return f"For patients comparing clinics in {city}, the clearer the booking path, the less likely they are to keep comparing."
     if angle_bucket == "No Multilingual Support":
         return f"In {city}, a multilingual signal can matter for patients deciding who feels easiest to choose."
+    if angle_bucket == "Poor Content Structure":
+        return f"For patients comparing clinics in {city}, clearer structure can make the site easier to understand and act on."
     return f"For patients comparing clinics in {city}, clarity and trust can decide who gets picked first."
 
 
