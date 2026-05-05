@@ -22,6 +22,8 @@ REQUIRED_FOR_DRAFT = (
     "Angle Bucket",
 )
 DUPLICATE_KEYS = ("Domain", "Email", "Phone")
+TEST_CLIENT_FIELDS = ("Test Client", "Is Test Client", "Client Type")
+GMAIL_DRAFT_FIELDS = ("Gmail Draft ID",)
 
 
 def get_client() -> Client:
@@ -103,6 +105,27 @@ def _duplicate_values(pages: Iterable[Dict[str, Any]], field: str) -> Dict[str, 
     return {value: ids for value, ids in values.items() if len(ids) > 1}
 
 
+def _is_truthy(value: str) -> bool:
+    return value.strip().lower() in {"true", "yes", "y", "1", "test", "test client"}
+
+
+def _queue_bucket(status: str, reply_status: str, has_checkout_started: bool, is_paid_client: bool, is_test_client: bool) -> str:
+    normalized = " ".join(status.strip().lower().replace("-", " ").split())
+    if is_test_client:
+        return "test_clients"
+    if is_paid_client or normalized == "paid client":
+        return "paid_clients"
+    if has_checkout_started or normalized in {"checkout sent", "checkout_started"}:
+        return "checkout_started"
+    if reply_status.strip().lower() == "replied" or normalized == "replied":
+        return "replies_needing_action"
+    if normalized in {"audit ready", "outreach drafted"}:
+        return "audit_ready_leads"
+    if normalized in {"new", "new lead", "researching"}:
+        return "new_leads"
+    return "other"
+
+
 def main() -> None:
     _, data_source_id = get_database_and_data_source()
     schema = get_data_source_schema()
@@ -122,9 +145,22 @@ def main() -> None:
     draft_ready_count = 0
     valid_draft_ready_count = 0
     skipped_count = 0
+    queue_counts: Dict[str, int] = defaultdict(int)
     for page in pages:
         properties = page.get("properties", {})
         status = _text(properties.get("Lead Status", {}) or properties.get("Outreach Status", {}))
+        reply_status = _text(properties.get("Reply Status", {}))
+        checkout_started = _text(properties.get("Checkout Status", {}))
+        paid_client = _text(properties.get("Client Status", {}))
+        gmail_draft_id = any(_text(properties.get(field, {})) for field in GMAIL_DRAFT_FIELDS)
+        sequence_step = _text(properties.get("Sequence Step", {}))
+        test_client = any(_is_truthy(_text(properties.get(field, {}))) for field in TEST_CLIENT_FIELDS)
+        bucket = _queue_bucket(status, reply_status, bool(checkout_started), bool(paid_client), test_client)
+        queue_counts[bucket] += 1
+        if gmail_draft_id or sequence_step in {"Email 1 Drafted", "Email 2 Drafted", "Email 3 Drafted"}:
+            queue_counts["drafted_emails"] += 1
+        if status_matches(status, *DRAFT_READY_STATUSES):
+            queue_counts["audit_ready_leads"] += 1
         if not status_matches(status, *DRAFT_READY_STATUSES):
             continue
         draft_ready_count += 1
@@ -141,6 +177,13 @@ def main() -> None:
     print(f"Draft-ready records: {draft_ready_count}")
     print(f"Valid draft-ready records: {valid_draft_ready_count}")
     print(f"Records skipped by validation: {skipped_count}")
+    print(f"Admin queue | new leads: {queue_counts['new_leads']}")
+    print(f"Admin queue | audit-ready leads: {queue_counts['audit_ready_leads']}")
+    print(f"Admin queue | drafted emails: {queue_counts['drafted_emails']}")
+    print(f"Admin queue | replies needing action: {queue_counts['replies_needing_action']}")
+    print(f"Admin queue | checkout-started leads: {queue_counts['checkout_started']}")
+    print(f"Admin queue | paid clients: {queue_counts['paid_clients']}")
+    print(f"Admin queue | test clients: {queue_counts['test_clients']}")
 
     duplicate_count = 0
     for field in DUPLICATE_KEYS:

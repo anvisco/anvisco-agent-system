@@ -163,11 +163,29 @@ Admin review should stay separate from automated execution.
 The review queue should cover:
 
 - Lead quality exceptions
+- New leads
+- Audit-ready leads
+- Drafted emails
+- Replies needing action
+- Checkout-started leads
+- Paid clients
 - Draft review before any human send
 - Reply handling exceptions
 - Checkout or webhook mismatches
 - Portal access issues
 - Test-client cleanup
+- Automation errors
+
+Admin review checkpoints should happen before:
+
+- Sending first outreach
+- Sending follow-ups
+- Sending pricing
+- Sending checkout links
+- Moving a lead to paid_client manually
+- Deleting test clients
+- Updating offer copy
+- Sending bulk campaigns
 
 Admin tools must support viewing, managing, and deleting test clients without affecting live client records.
 

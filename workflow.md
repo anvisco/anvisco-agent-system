@@ -206,8 +206,20 @@ The project should not launch until final payment is marked paid.
 Brian should manually review:
 
 - New lead quality
+- Audit-ready leads before Email 1
 - Outreach email before sending
+- Follow-up emails before sending
 - Replies before response
 - Package recommendation before proposal
+- Pricing before sharing
+- Checkout links before sharing
 - Deposit status before project confirmation
 - Final payment before launch
+- Test-client deletes before removal
+- Offer copy before publishing changes
+
+Admin safeguards:
+
+- Drafts only by default
+- No manual payment links in live prospect copy
+- No bulk campaigns without explicit review

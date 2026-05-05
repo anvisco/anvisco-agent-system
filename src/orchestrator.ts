@@ -121,6 +121,9 @@ function main(): void {
   mkdirSync(LOG_DIR, { recursive: true });
   log(`Outreach daily automation started | step=${options.step} | dryRun=${options.dryRun} | write=${options.write}`);
   log("Safety policy: Gmail drafts only. No automatic email sending.");
+  if ((process.env.SEND_EMAILS || "").trim().toLowerCase() === "true") {
+    log("Safety policy: SEND_EMAILS=true was requested, but this runner only creates Gmail drafts and will not send email.");
+  }
 
   let failures = 0;
   for (const phase of phasesForStep(options.step)) {
