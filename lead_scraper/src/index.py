@@ -5,6 +5,7 @@ from typing import Any, Dict
 from .auditor import audit_lead
 from .config import settings
 from .lead_finder import find_local_leads
+from .lead_finder import resolve_active_city_context
 from .logger import DailyLogger
 from .models import AuditedLead, FoundLead
 from .notion_writer import (
@@ -71,7 +72,7 @@ def _validate_quota_settings() -> None:
         )
 
 
-def _city_metrics_line(logger: DailyLogger, accepted_count: int) -> str:
+def _city_metrics_line(logger: DailyLogger, accepted_count: int, active_city: str, active_province: str) -> str:
     candidates_processed = logger.counters.get("candidates_processed", 0)
     duplicates_skipped = logger.counters.get("duplicates_skipped", 0)
     leads_scraped = logger.counters.get("leads_scraped", 0)
@@ -80,16 +81,16 @@ def _city_metrics_line(logger: DailyLogger, accepted_count: int) -> str:
     usable_email_rate = (usable_email_leads / leads_scraped) if leads_scraped else 0.0
 
     if accepted_count >= settings.city_target_usable_leads:
-        recommendation = f"city target reached for {settings.active_city}"
+        recommendation = f"city target reached for {active_city}"
     elif duplicate_rate > settings.city_duplicate_rate_limit:
-        recommendation = f"city looks saturated for {settings.active_city}"
+        recommendation = f"city looks saturated for {active_city}"
     elif usable_email_rate < settings.city_min_usable_email_rate:
-        recommendation = f"usable email rate is weak for {settings.active_city}"
+        recommendation = f"usable email rate is weak for {active_city}"
     else:
-        recommendation = f"keep {settings.active_city} active"
+        recommendation = f"keep {active_city} active"
 
     return (
-        f"City metrics | province={settings.active_province} | city={settings.active_city} | "
+        f"City metrics | province={active_province} | city={active_city} | "
         f"duplicate_rate={duplicate_rate:.2%} | usable_email_rate={usable_email_rate:.2%} | "
         f"recommendation={recommendation}"
     )
@@ -127,10 +128,11 @@ def run_daily_scrape() -> None:
     logger = DailyLogger()
     logger.event("Starting lead scraper daily run")
     _validate_quota_settings()
+    active_city, active_province = resolve_active_city_context()
     logger.event(f"DRY_RUN: {settings.dry_run}")
     logger.event(f"Country scope: {settings.country_scope}")
-    logger.event(f"Active province: {settings.active_province}")
-    logger.event(f"Active city: {settings.active_city}")
+    logger.event(f"Active province: {active_province}")
+    logger.event(f"Active city: {active_city}")
     logger.event(f"One city per run: {settings.one_city_per_run}")
     logger.event(f"MAX_NEW_LEADS_PER_RUN: {settings.max_new_leads_per_run}")
     logger.event(f"MAX_PLACES_RESULTS_PER_LOCATION: {settings.max_places_results_per_location}")
@@ -258,7 +260,7 @@ def run_daily_scrape() -> None:
             f"reason: {reason}"
         )
 
-    logger.event(_city_metrics_line(logger, accepted_count))
+    logger.event(_city_metrics_line(logger, accepted_count, active_city, active_province))
 
     logger.event("Lead scraper daily run complete")
     logger.write()

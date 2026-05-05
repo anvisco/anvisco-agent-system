@@ -19,6 +19,7 @@ CONTACTED_OR_CLOSED = {
     "Not Interested",
     "Do Not Contact",
     "Closed",
+    "not_fit",
 }
 EARLY_STAGE = {"New Lead", "Draft Ready", "audit_ready", "draft_ready"}
 SOURCE_GOOGLE_PLACES_NEW = "Google Places New"

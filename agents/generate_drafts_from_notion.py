@@ -91,6 +91,11 @@ SEND_MODE_CANDIDATES = ["Send Mode"]
 AUTO_SEND_ELIGIBLE_CANDIDATES = ["Auto-Send Eligible"]
 LAST_EMAIL_DRAFTED_AT_CANDIDATES = ["Last Email Drafted At"]
 LAST_EMAIL_SENT_AT_CANDIDATES = ["Last Email Sent At", "Last Outreach Date"]
+FOLLOW_UP_DUE_NOW_CANDIDATES = ["Follow-Up Due Now"]
+
+CANADA_COUNTRY = "canada"
+TERMINAL_LEAD_STATUSES = {"not_fit"}
+BLOCKED_DUPLICATE_STATUSES = {"possible_duplicate", "duplicate", "already_contacted", "do_not_contact"}
 
 STAGE_NEW_LEADS = "new_leads"
 STAGE_BACKFILL = "backfill"
@@ -176,6 +181,87 @@ def _get_date_value(property_value: Dict[str, Any]) -> Optional[date]:
         return None
 
 
+def _get_formula_value(property_value: Dict[str, Any]) -> Any:
+    if not property_value:
+        return None
+    formula = property_value.get("formula")
+    if not isinstance(formula, dict):
+        return None
+    if formula.get("type") == "boolean":
+        return formula.get("boolean")
+    if formula.get("type") == "number":
+        return formula.get("number")
+    if formula.get("type") == "string":
+        return formula.get("string")
+    if formula.get("type") == "date":
+        return formula.get("date")
+    return None
+
+
+def _is_true_like(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "1"}
+    return False
+
+
+def _normalized_text_value(lead: Dict[str, Any], candidates: List[str]) -> str:
+    return _lead_text_value(lead, candidates).strip().lower()
+
+
+def _lead_is_canada(lead: Dict[str, Any]) -> bool:
+    country = _normalized_text_value(lead, COUNTRY_CANDIDATES)
+    return country == CANADA_COUNTRY
+
+
+def _lead_has_terminal_status(lead: Dict[str, Any]) -> bool:
+    lead_status = _normalized_text_value(lead, STATUS_FIELD_CANDIDATES)
+    return lead_status in TERMINAL_LEAD_STATUSES
+
+
+def _lead_duplicate_status(lead: Dict[str, Any]) -> str:
+    return _normalized_text_value(lead, DUPLICATE_STATUS_CANDIDATES)
+
+
+def _lead_gmail_match_status(lead: Dict[str, Any]) -> str:
+    return _normalized_text_value(lead, GMAIL_MATCH_STATUS_CANDIDATES)
+
+
+def _draft_block_reasons(
+    lead: Dict[str, Any],
+    *,
+    require_unique_duplicate: bool,
+    require_gmail_match_no_match: bool,
+) -> List[str]:
+    reasons: List[str] = []
+
+    if _lead_has_terminal_status(lead):
+        reasons.append("Lead Status is not_fit")
+
+    country = _lead_text_value(lead, COUNTRY_CANDIDATES)
+    if country and country.lower() != "canada":
+        reasons.append(f"Country is {country}")
+    elif not country:
+        reasons.append("Country is missing")
+
+    duplicate_status = _lead_duplicate_status(lead)
+    if require_unique_duplicate:
+        if duplicate_status != "unique":
+            reasons.append(f"Duplicate Status is {duplicate_status or '<empty>'}")
+    elif duplicate_status in BLOCKED_DUPLICATE_STATUSES:
+        reasons.append(f"Duplicate Status is {duplicate_status}")
+
+    if require_gmail_match_no_match:
+        gmail_match_status = _lead_gmail_match_status(lead)
+        if gmail_match_status != "no_match":
+            reasons.append(f"Gmail Match Status is {gmail_match_status or '<empty>'}")
+
+    return reasons
+
+
 def _first_existing_property_name(properties: Dict[str, Any], candidates: List[str]) -> Optional[str]:
     for candidate in candidates:
         if candidate in properties:
@@ -232,6 +318,40 @@ def _build_query_filter(
     )
     if status_filter:
         filter_parts.append(status_filter)
+
+    lead_status_property = _first_existing_property_name(properties, ["Lead Status"])
+    if lead_status_property:
+        _print_detected_fields(properties, [lead_status_property], "lead status field")
+        lead_status_filter = _build_not_equals_filter(
+            lead_status_property,
+            properties[lead_status_property].get("type"),
+            "not_fit",
+        )
+        if lead_status_filter:
+            filter_parts.append(lead_status_filter)
+
+    country_property = _first_existing_property_name(properties, COUNTRY_CANDIDATES)
+    if country_property:
+        _print_detected_fields(properties, [country_property], "country field")
+        country_filter = _build_equality_filter(
+            country_property,
+            properties[country_property].get("type"),
+            "Canada",
+        )
+        if country_filter:
+            filter_parts.append(country_filter)
+
+    duplicate_status_property = _first_existing_property_name(properties, DUPLICATE_STATUS_CANDIDATES)
+    if duplicate_status_property:
+        _print_detected_fields(properties, [duplicate_status_property], "duplicate status field")
+        for blocked_status in ("possible_duplicate", "duplicate", "already_contacted", "do_not_contact"):
+            duplicate_filter = _build_not_equals_filter(
+                duplicate_status_property,
+                properties[duplicate_status_property].get("type"),
+                blocked_status,
+            )
+            if duplicate_filter:
+                filter_parts.append(duplicate_filter)
 
     gmail_draft_id_property = _first_existing_property_name(properties, GMAIL_DRAFT_ID_CANDIDATES)
     if gmail_draft_id_property:
@@ -341,6 +461,18 @@ def _build_equality_filter(property_name: str, property_type: str, value: str) -
         return {"property": property_name, "rich_text": {"equals": value}}
 
     print(f"Warning: skipping unsupported filter type '{property_type}' for {property_name}")
+    return None
+
+
+def _build_not_equals_filter(property_name: str, property_type: str, value: str) -> Optional[Dict[str, Any]]:
+    if property_type == "status":
+        return {"property": property_name, "status": {"does_not_equal": value}}
+    if property_type == "select":
+        return {"property": property_name, "select": {"does_not_equal": value}}
+    if property_type == "rich_text":
+        return {"property": property_name, "rich_text": {"does_not_equal": value}}
+
+    print(f"Warning: skipping unsupported not-equals filter type '{property_type}' for {property_name}")
     return None
 
 
@@ -517,22 +649,7 @@ def _auto_send_is_eligible(lead: Dict[str, Any], sequence: Dict[str, Any], alias
         reasons.append("AUTO_SEND_FIRST_EMAILS is false")
     if settings.require_admin_approval_for_send and not _lead_checkbox_true(lead, ADMIN_APPROVED_CANDIDATES):
         reasons.append("Admin Approved is not true")
-    country = _lead_text_value(lead, COUNTRY_CANDIDATES)
-    if country and country.lower() != "canada":
-        reasons.append(f"Country is {country or '<empty>'}")
-    elif not country:
-        reasons.append("Country is missing")
-    duplicate_status = _lead_text_value(lead, DUPLICATE_STATUS_CANDIDATES)
-    if duplicate_status and duplicate_status.lower() != "unique":
-        reasons.append(f"Duplicate Status is {duplicate_status}")
-    elif not duplicate_status:
-        reasons.append("Duplicate Status is missing")
-    gmail_match_status = _lead_text_value(lead, GMAIL_MATCH_STATUS_CANDIDATES)
-    if gmail_match_status:
-        if gmail_match_status.lower() != "no_match":
-            reasons.append(f"Gmail Match Status is {gmail_match_status}")
-    else:
-        reasons.append("Gmail Match Status is missing")
+    reasons.extend(_draft_block_reasons(lead, require_unique_duplicate=True, require_gmail_match_no_match=True))
     if _lead_checkbox_true(lead, ["Do Not Contact"]):
         reasons.append("Do Not Contact is true")
     casl_basis = _lead_text_value(lead, CASL_BASIS_CANDIDATES)
@@ -908,10 +1025,25 @@ def query_due_followups() -> List[Dict[str, Any]]:
         outreach_status_property = _first_existing_property_name(properties, STATUS_FIELD_CANDIDATES)
         reply_status_property = _first_existing_property_name(properties, REPLY_STATUS_CANDIDATES)
         next_followup_property = _first_existing_property_name(properties, NEXT_FOLLOW_UP_DATE_CANDIDATES)
+        follow_up_due_now_property = _first_existing_property_name(properties, FOLLOW_UP_DUE_NOW_CANDIDATES)
         outreach_status = _get_text_value(_get_property(lead, outreach_status_property or ""))
         reply_status = _get_text_value(_get_property(lead, reply_status_property or ""))
         next_followup = _get_date_value(_get_property(lead, next_followup_property or ""))
+        follow_up_due_now = False
+        if follow_up_due_now_property:
+            follow_up_due_now = _is_true_like(_get_formula_value(_get_property(lead, follow_up_due_now_property)))
+
+        if _lead_has_terminal_status(lead):
+            continue
+        if not _lead_is_canada(lead):
+            continue
+        if _lead_duplicate_status(lead) in BLOCKED_DUPLICATE_STATUSES:
+            continue
         if reply_status == "Replied" or outreach_status in {"Replied", "Closed"}:
+            continue
+        if follow_up_due_now_property:
+            if follow_up_due_now:
+                due.append(lead)
             continue
         if outreach_status in {"Email 1 Sent", "Email 2 Sent"} and next_followup and today >= next_followup:
             due.append(lead)
@@ -957,6 +1089,10 @@ def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
     business_name = _get_text_value(_get_property(lead, name_property or ""))
     gmail_draft_id = _get_text_value(_get_property(lead, gmail_draft_id_property or ""))
 
+    blocked_reasons = _draft_block_reasons(lead, require_unique_duplicate=False, require_gmail_match_no_match=False)
+    if blocked_reasons:
+        _log_skip_details(lead, "; ".join(blocked_reasons))
+        return "skipped_wrong_status"
     if outreach_status not in {"New Lead", "Draft Ready", "audit_ready", "draft_ready"}:
         _log_skip_details(lead, f"Outreach Status is {outreach_status or '<empty>'}")
         return "skipped_wrong_status"
@@ -1074,6 +1210,10 @@ def _process_due_followup(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
     email_property = _first_existing_property_name(properties, EMAIL_FIELD_CANDIDATES)
     email = _get_text_value(_get_property(lead, email_property or ""))
     alias_verified = is_verified_send_as_alias(settings.gmail_send_as_email)
+    blocked_reasons = _draft_block_reasons(lead, require_unique_duplicate=False, require_gmail_match_no_match=False)
+    if blocked_reasons:
+        print(f"Skipped {lead_name}: {', '.join(blocked_reasons)}")
+        return "skipped"
 
     if outreach_status == "Email 1 Sent":
         target_step = "Email 2 Drafted"
