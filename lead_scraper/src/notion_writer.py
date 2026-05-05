@@ -27,6 +27,8 @@ SOURCE_GOOGLE_PLACES_NEW = "Google Places New"
 FIELD_MAP = {
     "Google Place ID": "google_place_id",
     "Business Name": "business_name",
+    "Country": "country",
+    "Province": "province",
     "Niche": "niche",
     "City": "city",
     "Website": "website",
@@ -47,6 +49,25 @@ FIELD_MAP = {
     "Last Scraped Date": None,
     "Scrape Notes": "scrape_notes",
     "Outreach Status": None,
+    "Subject Angle": "subject_angle",
+    "Clinic Strengths": "clinic_strengths",
+    "Strongest Advantage": "strongest_advantage",
+    "Patient Type / Location Angle": "patient_type_location_angle",
+    "Top 3 Issues": "top_3_issues",
+    "Business Impact": "business_impact",
+    "Recommended Fix": "recommended_fix",
+    "Email Angle": "email_angle",
+    "Loom Link": "loom_link",
+    "Send Mode": "send_mode",
+    "Auto-Send Eligible": "auto_send_eligible",
+    "Duplicate Status": "duplicate_status",
+    "Duplicate Reason": "duplicate_reason",
+    "Gmail Match Status": "gmail_match_status",
+    "Gmail Draft ID": "gmail_draft_id",
+    "Gmail Thread ID": "gmail_thread_id",
+    "Gmail Sent Status": "gmail_sent_status",
+    "Admin Approved": "admin_approved",
+    "CASL Basis": "casl_basis",
     "Contact Page URL": "contact_page_url",
     "Booking URL": "booking_url",
     "Languages": "languages",
@@ -91,6 +112,8 @@ def _plain_text(value: Dict[str, Any]) -> str:
         return str(value["number"])
     if value.get("date"):
         return value["date"].get("start", "")
+    if value.get("checkbox") is not None:
+        return "true" if value["checkbox"] else "false"
     return ""
 
 
@@ -115,6 +138,8 @@ def _property_value(prop_type: str, value: Any) -> Optional[Dict[str, Any]]:
         return {"status": {"name": str(value)}}
     if prop_type == "date":
         return {"date": {"start": str(value)}}
+    if prop_type == "checkbox":
+        return {"checkbox": bool(value)}
     return None
 
 

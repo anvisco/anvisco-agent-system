@@ -11,7 +11,7 @@ from notion_client import Client
 
 from src.config import settings
 from src.email_writer import generate_email_sequence
-from src.gmail_client import create_draft
+from src.gmail_client import create_draft, is_verified_send_as_alias, send_email_message
 from src.notion_client import get_data_source_schema, get_database_and_data_source
 
 
@@ -70,6 +70,26 @@ REPLY_STATUS_CANDIDATES = ["Reply Status"]
 GMAIL_DRAFT_ID_CANDIDATES = ["Gmail Draft ID"]
 GMAIL_THREAD_ID_CANDIDATES = ["Gmail Thread ID"]
 SCRAPE_NOTES_CANDIDATES = ["Scrape Notes"]
+COUNTRY_CANDIDATES = ["Country"]
+PROVINCE_CANDIDATES = ["Province"]
+SUBJECT_ANGLE_CANDIDATES = ["Subject Angle", "Email Angle"]
+CLINIC_STRENGTHS_CANDIDATES = ["Clinic Strengths"]
+STRONGEST_ADVANTAGE_CANDIDATES = ["Strongest Advantage"]
+PATIENT_TYPE_LOCATION_ANGLE_CANDIDATES = ["Patient Type / Location Angle"]
+TOP_3_ISSUES_CANDIDATES = ["Top 3 Issues"]
+BUSINESS_IMPACT_CANDIDATES = ["Business Impact"]
+RECOMMENDED_FIX_CANDIDATES = ["Recommended Fix"]
+EMAIL_ANGLE_CANDIDATES = ["Email Angle"]
+LOOM_LINK_CANDIDATES = ["Loom Link"]
+DUPLICATE_STATUS_CANDIDATES = ["Duplicate Status"]
+GMAIL_MATCH_STATUS_CANDIDATES = ["Gmail Match Status"]
+GMAIL_SENT_STATUS_CANDIDATES = ["Gmail Sent Status"]
+ADMIN_APPROVED_CANDIDATES = ["Admin Approved"]
+CASL_BASIS_CANDIDATES = ["CASL Basis"]
+SEND_MODE_CANDIDATES = ["Send Mode"]
+AUTO_SEND_ELIGIBLE_CANDIDATES = ["Auto-Send Eligible"]
+LAST_EMAIL_DRAFTED_AT_CANDIDATES = ["Last Email Drafted At"]
+LAST_EMAIL_SENT_AT_CANDIDATES = ["Last Email Sent At"]
 
 STAGE_NEW_LEADS = "new_leads"
 STAGE_BACKFILL = "backfill"
@@ -453,6 +473,84 @@ def _lead_presence_flag(lead: Dict[str, Any], candidates: List[str]) -> bool:
     return bool(_get_text_value(_get_property(lead, property_name)))
 
 
+def _lead_text_value(lead: Dict[str, Any], candidates: List[str]) -> str:
+    properties = lead.get("properties", {})
+    property_name = _first_existing_property_name(properties, candidates)
+    if not property_name:
+        return ""
+    return _get_text_value(_get_property(lead, property_name))
+
+
+def _lead_text_count(lead: Dict[str, Any], candidates: List[str]) -> int:
+    text = _lead_text_value(lead, candidates)
+    if not text:
+        return 0
+    parts = [part.strip() for part in text.replace("\n", ",").split(",") if part.strip()]
+    return len(parts)
+
+
+def _lead_checkbox_true(lead: Dict[str, Any], candidates: List[str]) -> bool:
+    properties = lead.get("properties", {})
+    property_name = _first_existing_property_name(properties, candidates)
+    if not property_name:
+        return False
+    return _get_checkbox_value(_get_property(lead, property_name))
+
+
+def _existing_gmail_artifact(lead: Dict[str, Any]) -> bool:
+    properties = lead.get("properties", {})
+    draft_property = _first_existing_property_name(properties, GMAIL_DRAFT_ID_CANDIDATES)
+    thread_property = _first_existing_property_name(properties, GMAIL_THREAD_ID_CANDIDATES)
+    sent_status_property = _first_existing_property_name(properties, GMAIL_SENT_STATUS_CANDIDATES)
+    return any(
+        _get_text_value(_get_property(lead, prop_name or ""))
+        for prop_name in (draft_property, thread_property, sent_status_property)
+    )
+
+
+def _auto_send_is_eligible(lead: Dict[str, Any], sequence: Dict[str, Any], alias_verified: bool) -> tuple[bool, List[str]]:
+    reasons: List[str] = []
+    if settings.send_mode != "auto_send":
+        reasons.append("send mode is not auto_send")
+    if not settings.auto_send_first_emails:
+        reasons.append("AUTO_SEND_FIRST_EMAILS is false")
+    if settings.require_admin_approval_for_send and not _lead_checkbox_true(lead, ADMIN_APPROVED_CANDIDATES):
+        reasons.append("Admin Approved is not true")
+    country = _lead_text_value(lead, COUNTRY_CANDIDATES)
+    if country and country.lower() != "canada":
+        reasons.append(f"Country is {country or '<empty>'}")
+    elif not country:
+        reasons.append("Country is missing")
+    duplicate_status = _lead_text_value(lead, DUPLICATE_STATUS_CANDIDATES)
+    if duplicate_status and duplicate_status.lower() != "unique":
+        reasons.append(f"Duplicate Status is {duplicate_status}")
+    elif not duplicate_status:
+        reasons.append("Duplicate Status is missing")
+    if _lead_checkbox_true(lead, ["Do Not Contact"]):
+        reasons.append("Do Not Contact is true")
+    casl_basis = _lead_text_value(lead, CASL_BASIS_CANDIDATES)
+    if not casl_basis:
+        reasons.append("CASL Basis is missing")
+    email = _lead_text_value(lead, EMAIL_FIELD_CANDIDATES)
+    if not email:
+        reasons.append("Email is missing")
+    if _existing_gmail_artifact(lead):
+        reasons.append("existing Gmail draft/thread/sent record already exists")
+    subject_angle = _lead_text_value(lead, SUBJECT_ANGLE_CANDIDATES) or sequence.get("subject_angle", "")
+    if not subject_angle:
+        reasons.append("Subject Angle is missing")
+    clinic_strengths = _lead_text_value(lead, CLINIC_STRENGTHS_CANDIDATES) or sequence.get("clinic_strengths", "")
+    if len([part for part in clinic_strengths.replace("\n", ",").split(",") if part.strip()]) < 4:
+        reasons.append("Clinic Strengths does not have enough real content")
+    if not alias_verified:
+        reasons.append("sender alias is not verified")
+    if not sequence.get("emails", {}).get("email_1", {}).get("subject"):
+        reasons.append("Email 1 subject is missing")
+    if not sequence.get("emails", {}).get("email_1", {}).get("body"):
+        reasons.append("Email 1 body is missing")
+    return not reasons, reasons
+
+
 def _log_skip_details(lead: Dict[str, Any], reason: str) -> None:
     properties = lead.get("properties", {})
     outreach_status_property = _first_existing_property_name(properties, OUTREACH_STATUS_FIELD_CANDIDATES)
@@ -693,6 +791,9 @@ def build_email_1_sequence_updates(
     sequence: Dict[str, Any],
     draft_id: str = "",
     thread_id: str = "",
+    sent_message_id: str = "",
+    sent_status: str = "",
+    auto_send_eligible: bool = False,
 ) -> Dict[str, Any]:
     properties = schema.get("properties", {})
     updates: Dict[str, Any] = {}
@@ -712,6 +813,17 @@ def build_email_1_sequence_updates(
     _add_update(updates, properties, LOOM_RECOMMENDED_CANDIDATES, sequence["loom_recommended"])
     if sequence["loom_script"]:
         _add_update(updates, properties, LOOM_SCRIPT_CANDIDATES, sequence["loom_script"])
+    _add_update_if_empty(updates, properties, lead, SUBJECT_ANGLE_CANDIDATES, sequence["subject_angle"])
+    _add_update_if_empty(updates, properties, lead, CLINIC_STRENGTHS_CANDIDATES, sequence["clinic_strengths"])
+    _add_update_if_empty(updates, properties, lead, STRONGEST_ADVANTAGE_CANDIDATES, sequence["strongest_advantage"])
+    _add_update_if_empty(updates, properties, lead, PATIENT_TYPE_LOCATION_ANGLE_CANDIDATES, sequence["patient_type_location_angle"])
+    _add_update_if_empty(updates, properties, lead, TOP_3_ISSUES_CANDIDATES, sequence["top_3_issues"])
+    _add_update_if_empty(updates, properties, lead, BUSINESS_IMPACT_CANDIDATES, sequence["business_impact"])
+    _add_update_if_empty(updates, properties, lead, RECOMMENDED_FIX_CANDIDATES, sequence["recommended_fix"])
+    _add_update_if_empty(updates, properties, lead, EMAIL_ANGLE_CANDIDATES, sequence["email_angle"])
+    _add_update_if_empty(updates, properties, lead, LOOM_LINK_CANDIDATES, sequence["loom_link"])
+    _add_update(updates, properties, SEND_MODE_CANDIDATES, settings.send_mode)
+    _add_update(updates, properties, AUTO_SEND_ELIGIBLE_CANDIDATES, auto_send_eligible)
 
     tier_property = _first_existing_property_name(properties, TIER_CANDIDATES)
     top_issue_property = _first_existing_property_name(properties, TOP_ISSUE_CANDIDATES)
@@ -729,6 +841,14 @@ def build_email_1_sequence_updates(
             _add_update(updates, properties, GMAIL_THREAD_ID_CANDIDATES, thread_id)
         _add_update(updates, properties, SEQUENCE_STEP_CANDIDATES, "Email 1 Drafted")
         _add_update(updates, properties, OUTREACH_STATUS_FIELD_CANDIDATES, "Draft Ready")
+        _add_update(updates, properties, LAST_EMAIL_DRAFTED_AT_CANDIDATES, datetime.now(timezone.utc).date().isoformat())
+
+    if sent_message_id:
+        _add_update(updates, properties, GMAIL_THREAD_ID_CANDIDATES, thread_id or sent_message_id)
+        _add_update(updates, properties, GMAIL_SENT_STATUS_CANDIDATES, sent_status or "Sent")
+        _add_update(updates, properties, SEQUENCE_STEP_CANDIDATES, "Email 1 Sent")
+        _add_update(updates, properties, OUTREACH_STATUS_FIELD_CANDIDATES, "Email 1 Sent")
+        _add_update(updates, properties, LAST_EMAIL_SENT_AT_CANDIDATES, datetime.now(timezone.utc).date().isoformat())
 
     return updates
 
@@ -847,6 +967,12 @@ def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
         return "skipped_already_drafted"
 
     sequence, _ = process_lead(lead)
+    alias_verified = is_verified_send_as_alias(settings.gmail_send_as_email)
+    if settings.gmail_send_as_email and not alias_verified:
+        print(
+            f"Warning: Gmail send-as alias {settings.gmail_send_as_email} is not verified. "
+            "Draft mode will continue, but auto-send must remain blocked."
+        )
 
     email_1 = sequence["emails"]["email_1"]
 
@@ -864,7 +990,37 @@ def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
         print("-" * 40)
         return "dry_run_email_1"
 
-    updates = build_email_1_sequence_updates(schema, lead, sequence)
+    auto_send_eligible, auto_send_reasons = _auto_send_is_eligible(lead, sequence, alias_verified)
+    if auto_send_eligible:
+        print(f"Auto-send approved for {lead_name}")
+    else:
+        print(f"Auto-send blocked for {lead_name}: {', '.join(auto_send_reasons)}")
+
+    if settings.send_mode == "auto_send" and settings.auto_send_first_emails and auto_send_eligible:
+        sent = send_email_message(
+            email,
+            email_1["subject"],
+            email_1["body"],
+            from_email=settings.gmail_send_as_email,
+            label_name=settings.gmail_label,
+        )
+        sent_id = sent.get("id", "")
+        thread_id = sent.get("threadId", "")
+        updates = build_email_1_sequence_updates(
+            schema,
+            lead,
+            sequence,
+            thread_id=thread_id,
+            sent_message_id=sent_id,
+            sent_status="Sent",
+            auto_send_eligible=True,
+        )
+        if updates:
+            update_notion_lead(lead["id"], updates)
+        print(f"Sent Email 1 for {lead_name} via verified alias {settings.gmail_send_as_email}")
+        return "email_1_sent"
+
+    updates = build_email_1_sequence_updates(schema, lead, sequence, auto_send_eligible=auto_send_eligible)
     if updates:
         update_notion_lead(lead["id"], updates)
         print(f"Generated sequence for {lead_name}; angle assigned: {sequence['angle_bucket']}")
@@ -877,13 +1033,26 @@ def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
         print(f"Skipped {lead_name}: draft already exists")
         return "duplicate_draft"
 
-    draft = create_draft(email, email_1["subject"], email_1["body"])
+    draft = create_draft(
+        email,
+        email_1["subject"],
+        email_1["body"],
+        from_email=settings.gmail_send_as_email if alias_verified else "",
+        label_name=settings.gmail_label,
+    )
     draft_id, thread_id = _draft_ids_from_gmail_response(draft)
     if not draft_id:
         print(f"Skipped {lead_name}: Gmail did not return a draft id")
         return "skipped"
 
-    updates = build_email_1_sequence_updates(schema, lead, sequence, draft_id=draft_id, thread_id=thread_id)
+    updates = build_email_1_sequence_updates(
+        schema,
+        lead,
+        sequence,
+        draft_id=draft_id,
+        thread_id=thread_id,
+        auto_send_eligible=auto_send_eligible,
+    )
     if updates:
         update_notion_lead(lead["id"], updates)
     print(f"Created Email 1 Gmail draft for {lead_name}")
@@ -897,6 +1066,7 @@ def _process_due_followup(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
     outreach_status = _get_text_value(_get_property(lead, outreach_status_property or ""))
     email_property = _first_existing_property_name(properties, EMAIL_FIELD_CANDIDATES)
     email = _get_text_value(_get_property(lead, email_property or ""))
+    alias_verified = is_verified_send_as_alias(settings.gmail_send_as_email)
 
     if outreach_status == "Email 1 Sent":
         target_step = "Email 2 Drafted"
@@ -929,7 +1099,13 @@ def _process_due_followup(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
         print(f"Skipped {lead_name}: Gmail draft creation disabled")
         return "skipped"
 
-    draft = create_draft(email, subject, body)
+    draft = create_draft(
+        email,
+        subject,
+        body,
+        from_email=settings.gmail_send_as_email if alias_verified else "",
+        label_name=settings.gmail_label,
+    )
     draft_id, thread_id = _draft_ids_from_gmail_response(draft)
     if not draft_id:
         print(f"Skipped {lead_name}: Gmail did not return a draft id")
@@ -997,6 +1173,7 @@ def main() -> None:
         "eligible_records": 0,
         "drafts_attempted": 0,
         "gmail_drafts_created": 0,
+        "gmail_emails_sent": 0,
         "new_leads_used": 0,
         "backfill_used": 0,
         "fallback_used": 0,
@@ -1051,6 +1228,16 @@ def main() -> None:
                             summary["backfill_used"] += 1
                         elif stage_name == STAGE_FALLBACK:
                             summary["fallback_used"] += 1
+                    elif result == "email_1_sent":
+                        summary["eligible_records"] += 1
+                        summary["drafts_attempted"] += 1
+                        summary["gmail_emails_sent"] += 1
+                        if stage_name == STAGE_NEW_LEADS:
+                            summary["new_leads_used"] += 1
+                        elif stage_name == STAGE_BACKFILL:
+                            summary["backfill_used"] += 1
+                        elif stage_name == STAGE_FALLBACK:
+                            summary["fallback_used"] += 1
                     elif result == "skipped_missing_email":
                         summary["skipped_missing_email"] += 1
                     elif result == "skipped_missing_website":
@@ -1065,10 +1252,11 @@ def main() -> None:
                     summary["errors"] += 1
                     print(f"Error processing {_get_lead_name(lead)}: {exc}")
 
-            if summary["gmail_drafts_created"] < MIN_DRAFTS_TARGET:
+            total_outreach_artifacts = summary["gmail_drafts_created"] + summary["gmail_emails_sent"]
+            if total_outreach_artifacts < MIN_DRAFTS_TARGET:
                 if summary["drafts_attempted"] >= MAX_DRAFTS_PER_RUN:
                     summary["shortfall_reason"] = (
-                        f"hard cap reached before soft target: created {summary['gmail_drafts_created']} of "
+                        f"hard cap reached before soft target: created or sent {total_outreach_artifacts} of "
                         f"{MIN_DRAFTS_TARGET}; cap is {MAX_DRAFTS_PER_RUN}"
                     )
                 elif not summary["drafts_attempted"]:
@@ -1077,8 +1265,8 @@ def main() -> None:
                     summary["shortfall_reason"] = "Gmail draft creation is disabled"
                 else:
                     summary["shortfall_reason"] = (
-                        f"eligible candidates were exhausted after stage rotation and dedupe: created "
-                        f"{summary['gmail_drafts_created']} of {MIN_DRAFTS_TARGET}"
+                        f"eligible candidates were exhausted after stage rotation and dedupe: created or sent "
+                        f"{total_outreach_artifacts} of {MIN_DRAFTS_TARGET}"
                     )
 
     if args.mode in {"all", "followups"}:
@@ -1107,6 +1295,7 @@ def main() -> None:
     print(f"- backfill_used: {summary['backfill_used']}")
     print(f"- fallback_used: {summary['fallback_used']}")
     print(f"- total drafts created: {summary['gmail_drafts_created']}")
+    print(f"- total emails sent: {summary['gmail_emails_sent']}")
     if summary["shortfall_reason"]:
         print(f"- shortfall reason: {summary['shortfall_reason']}")
     print(f"- records_checked: {summary['records_checked']}")

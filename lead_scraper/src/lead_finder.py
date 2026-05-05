@@ -113,7 +113,10 @@ def _rotate(items: list[str], offset: int) -> list[str]:
 
 
 def _build_search_plan() -> list[tuple[str, str]]:
-    locations = _rotate(settings.locations, _today_rotation_offset(len(settings.locations)))
+    locations = settings.locations[:1] if settings.one_city_per_run else _rotate(
+        settings.locations,
+        _today_rotation_offset(len(settings.locations)),
+    )
     queries = _rotate(settings.query_variations, _today_rotation_offset(len(settings.query_variations)) + 1)
     if not locations or not queries:
         return []
@@ -163,9 +166,10 @@ def find_local_leads(logger: DailyLogger | None = None) -> List[FoundLead]:
 
     search_plan = _build_search_plan()
     for location, query_term in search_plan:
-        query = f"{query_term} in {location}"
+        query = f"{query_term} in {location}, {settings.country_scope}"
         if logger:
             logger.event(f"Location used: {location}")
+            logger.event(f"Country scope: {settings.country_scope}")
             logger.event(f"Query used: {query_term}")
         places = _search_places_new(query)
         duplicates_skipped = 0

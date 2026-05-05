@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .config import settings
 from .models import AuditedLead, FoundLead, ScrapedWebsite
 
 
@@ -7,6 +8,12 @@ def _top_issue(scraped: ScrapedWebsite) -> str:
     signals = scraped.issue_signals
     if "no booking funnel" in signals:
         return "The website has no clear booking funnel, so visitors are pushed toward phone or email instead of a guided patient flow."
+    if "trust signals are thin" in signals:
+        return "The website does not surface enough trust signals early, which can make patients hesitate before booking."
+    if "local discovery signals are thin" in signals:
+        return "The website does not clearly support local discovery, so nearby patients may not immediately see why this clinic is relevant."
+    if "faq/schema readiness is not obvious" in signals:
+        return "The website does not make FAQ or schema readiness obvious, which can weaken scanability and search clarity."
     if "weak mobile layout" in signals:
         return "The website appears to have a weak mobile layout, which can make it harder for patients to take action from their phone."
     if "too much content without structure" in signals:
@@ -22,17 +29,13 @@ def _top_issue(scraped: ScrapedWebsite) -> str:
 
 def _recommended_offer(top_issue: str) -> str:
     lower = top_issue.lower()
-    if "booking" in lower or "patient flow" in lower:
-        return "Booking flow improvement"
-    if "mobile" in lower:
-        return "Mobile conversion improvement"
-    if "slow" in lower:
-        return "Speed optimization"
-    if "structure" in lower or "services" in lower:
-        return "Website cleanup and organization"
-    if "multilingual" in lower:
-        return "Website redesign"
-    return "Funnel optimization"
+    if any(keyword in lower for keyword in ("broken", "outdated", "low trust", "failed", "slow")):
+        return "Full Build"
+    if any(keyword in lower for keyword in ("booking", "patient flow", "cta", "structure", "services", "faq", "mobile", "local discovery", "trust signals")):
+        return "Modules / Improvements"
+    if any(keyword in lower for keyword in ("multilingual", "translation")):
+        return "Full Website Audit"
+    return "Free Audit"
 
 
 def _angle_bucket(top_issue: str, scraped: ScrapedWebsite) -> str:
@@ -47,9 +50,107 @@ def _angle_bucket(top_issue: str, scraped: ScrapedWebsite) -> str:
         return "Outdated Website"
     if "multilingual" in issue_text:
         return "No Multilingual Support"
+    if "trust signals" in issue_text:
+        return "Looks Good But Does Not Convert"
+    if "local discovery" in issue_text or "faq/schema" in issue_text:
+        return "Poor Content Structure"
     if "structure" in issue_text or "scan" in issue_text or "content" in issue_text:
         return "Poor Content Structure"
     return "Looks Good But Does Not Convert"
+
+
+def _strengths(found: FoundLead, scraped: ScrapedWebsite) -> list[str]:
+    strengths: list[str] = []
+    if found.review_count and found.review_count >= 50:
+        strengths.append(f"solid review profile with {found.review_count} reviews")
+    if found.rating and found.rating >= 4.4:
+        strengths.append(f"strong rating around {found.rating}")
+    if scraped.booking_url:
+        strengths.append("an obvious booking path")
+    if scraped.contact_page_url:
+        strengths.append("a clear contact page")
+    if scraped.languages:
+        strengths.append(f"multilingual support in {', '.join(scraped.languages[:2])}")
+    if scraped.services:
+        strengths.append(f"services like {', '.join(scraped.services[:3])}")
+    if scraped.https_active:
+        strengths.append("HTTPS security is active")
+    if scraped.mobile_friendly != "unknown":
+        strengths.append(f"a basic mobile layout signal ({scraped.mobile_friendly})")
+    if scraped.issue_signals:
+        strengths.append("enough content to work with")
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in strengths:
+        key = item.lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+    return deduped[:7]
+
+
+def _subject_angle(found: FoundLead, scraped: ScrapedWebsite, angle_bucket: str) -> str:
+    if scraped.booking_url:
+        return f"Is {found.business_name}'s booking path clear enough?"
+    if found.review_count and found.review_count >= 50:
+        return f"Is {found.business_name}'s review advantage clear enough?"
+    if "No Multilingual Support" == angle_bucket:
+        return f"Is {found.business_name}'s multilingual advantage clear enough?"
+    return f"Is {found.business_name} making it easy enough to choose you?"
+
+
+def _patient_type_location_angle(found: FoundLead, scraped: ScrapedWebsite) -> str:
+    if scraped.languages:
+        return f"{found.city} patients looking for multilingual care"
+    if scraped.services:
+        return f"{found.city} patients comparing services like {', '.join(scraped.services[:2])}"
+    return f"patients comparing clinics in {found.city}"
+
+
+def _top_3_issues(scraped: ScrapedWebsite) -> str:
+    if not scraped.issue_signals:
+        return ""
+    return ", ".join(scraped.issue_signals[:3])
+
+
+def _business_impact(found: FoundLead, top_issue: str, angle_bucket: str) -> str:
+    city = found.city or "the area"
+    if angle_bucket in {"No Booking Funnel", "Too Many CTAs"}:
+        return f"For patients comparing clinics in {city}, unclear booking paths can lose attention before someone ever books."
+    if angle_bucket == "Weak Mobile Experience":
+        return f"Interested patients on mobile may drop off before calling if the experience feels clunky or hard to scan."
+    if angle_bucket == "Outdated Website":
+        return f"An outdated or low-trust experience can reduce confidence quickly for patients comparing options in {city}."
+    if angle_bucket == "No Multilingual Support":
+        return f"Patients in {city} who prefer another language may not feel fully comfortable moving forward."
+    if angle_bucket == "Poor Content Structure":
+        return f"If the site is hard to scan, the clinic can lose attention before visitors understand the strongest reasons to book."
+    return f"The site has room to make the patient journey clearer and easier to act on around {top_issue.lower()}."
+
+
+def _recommended_fix(found: FoundLead, scraped: ScrapedWebsite, angle_bucket: str) -> str:
+    if angle_bucket in {"No Booking Funnel", "Too Many CTAs"}:
+        return "Clarify the booking path, reduce competing CTAs, and make the next step obvious."
+    if angle_bucket == "Weak Mobile Experience":
+        return "Tighten the mobile layout and make primary actions easier to tap."
+    if angle_bucket == "Outdated Website":
+        return "Refresh the trust signals, structure, and visual hierarchy so the site feels current."
+    if angle_bucket == "No Multilingual Support":
+        return "Make the key patient paths easier to understand for multilingual visitors."
+    if angle_bucket == "Poor Content Structure":
+        return "Restructure services, trust signals, and FAQs so the site scans faster."
+    if scraped.services:
+        return "Clarify the strongest services and make the booking flow easier to follow."
+    return "Clean up the site structure so visitors can get to the right next step faster."
+
+
+def _email_angle(found: FoundLead, angle_bucket: str) -> str:
+    city = found.city or "their local market"
+    if angle_bucket in {"No Booking Funnel", "Too Many CTAs"}:
+        return f"For patients comparing clinics in {city}, the clearer the booking path, the less likely they are to keep comparing."
+    if angle_bucket == "No Multilingual Support":
+        return f"In {city}, a multilingual signal can matter for patients deciding who feels easiest to choose."
+    return f"For patients comparing clinics in {city}, clarity and trust can decide who gets picked first."
 
 
 def score_lead(found: FoundLead, scraped: ScrapedWebsite, top_issue: str) -> int:
@@ -78,6 +179,13 @@ def audit_lead(found: FoundLead, scraped: ScrapedWebsite) -> AuditedLead:
     offer = _recommended_offer(top_issue)
     angle_bucket = _angle_bucket(top_issue, scraped)
     score = score_lead(found, scraped, top_issue)
+    strengths = _strengths(found, scraped)
+    subject_angle = _subject_angle(found, scraped, angle_bucket)
+    patient_type_location_angle = _patient_type_location_angle(found, scraped)
+    top_3_issues = _top_3_issues(scraped)
+    business_impact = _business_impact(found, top_issue, angle_bucket)
+    recommended_fix = _recommended_fix(found, scraped, angle_bucket)
+    email_angle = _email_angle(found, angle_bucket)
     notes = [
         f"Website status: {scraped.website_status}",
         f"HTTPS active: {'yes' if scraped.https_active else 'no'}",
@@ -112,6 +220,27 @@ def audit_lead(found: FoundLead, scraped: ScrapedWebsite) -> AuditedLead:
         website_status=scraped.website_status,
         source=found.source,
         scrape_notes="\n".join(notes),
+        country=getattr(settings, "country_scope", "Canada") or "Canada",
+        province=getattr(settings, "active_province", ""),
+        subject_angle=subject_angle,
+        clinic_strengths=", ".join(strengths),
+        strongest_advantage=strengths[0] if strengths else "",
+        patient_type_location_angle=patient_type_location_angle,
+        top_3_issues=top_3_issues,
+        business_impact=business_impact,
+        recommended_fix=recommended_fix,
+        email_angle=email_angle,
+        loom_link="",
+        send_mode=getattr(settings, "send_mode", "auto_draft"),
+        auto_send_eligible=False,
+        duplicate_status="Unique",
+        duplicate_reason="",
+        gmail_match_status="",
+        gmail_draft_id="",
+        gmail_thread_id="",
+        gmail_sent_status="",
+        admin_approved=False,
+        casl_basis="",
         contact_page_url=scraped.contact_page_url,
         booking_url=scraped.booking_url,
         languages=", ".join(scraped.languages),

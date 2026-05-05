@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import base64
+import re
 from email.message import EmailMessage
+from email.utils import formataddr
+from html import unescape
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -16,6 +19,8 @@ from src.config import settings
 GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.settings.basic",
 ]
 
 
@@ -86,6 +91,48 @@ def get_profile_email() -> str:
     return profile.get("emailAddress", "")
 
 
+def get_send_as_aliases() -> list[Dict[str, Any]]:
+    service = get_gmail_service()
+    aliases: list[Dict[str, Any]] = []
+    page_token: Optional[str] = None
+
+    while True:
+        request = service.users().settings().sendAs().list(userId="me")
+        if page_token:
+            request = request.pageToken(page_token)
+        try:
+            response = request.execute()
+        except Exception as exc:
+            print(f"Warning: Gmail send-as alias lookup failed: {exc}")
+            return []
+
+        aliases.extend(response.get("sendAs", []))
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+
+    return aliases
+
+
+def is_verified_send_as_alias(email: str) -> bool:
+    preferred_email = email.strip().lower()
+    if not preferred_email:
+        return False
+    for alias in get_send_as_aliases():
+        alias_email = str(alias.get("sendAsEmail", "")).strip().lower()
+        status = str(alias.get("verificationStatus", "")).strip().lower()
+        if alias_email == preferred_email and (status in {"accepted", "verified"} or alias.get("isDefault")):
+            return True
+    return False
+
+
+def resolve_verified_send_as_email(preferred_email: str) -> str:
+    preferred_email = preferred_email.strip().lower()
+    if preferred_email and is_verified_send_as_alias(preferred_email):
+        return preferred_email
+    return ""
+
+
 def search_messages(query: str, max_results: int = 10) -> list[Dict[str, Any]]:
     service = get_gmail_service()
     response = service.users().messages().list(userId="me", q=query, maxResults=max_results).execute()
@@ -96,17 +143,108 @@ def get_thread(thread_id: str) -> Dict[str, Any]:
     return get_gmail_service().users().threads().get(userId="me", id=thread_id, format="metadata").execute()
 
 
-def build_draft_payload(to_email: str, subject: str, body: str) -> Dict[str, Any]:
+def ensure_gmail_label(label_name: str) -> str:
+    service = get_gmail_service()
+    response = service.users().labels().list(userId="me").execute()
+    for label in response.get("labels", []):
+        if label.get("name") == label_name:
+            return label.get("id", "")
+
+    created = service.users().labels().create(
+        userId="me",
+        body={
+            "name": label_name,
+            "labelListVisibility": "labelShow",
+            "messageListVisibility": "show",
+        },
+    ).execute()
+    return created.get("id", "")
+
+
+def _html_to_text(body: str) -> str:
+    text = body.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+    text = re.sub(r"</p\s*>", "\n\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<li>", "- ", text, flags=re.IGNORECASE)
+    text = re.sub(r"</li>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    return unescape(text).strip()
+
+
+def _build_email_message(
+    to_email: str,
+    subject: str,
+    body: str,
+    from_email: str = "",
+) -> EmailMessage:
     message = EmailMessage()
     message["To"] = to_email
     message["Subject"] = subject
-    message.set_content(body)
+    if from_email:
+        message["From"] = formataddr(("Brian Nguyen", from_email))
+    message.set_content(_html_to_text(body))
+    message.add_alternative(body, subtype="html")
+    return message
+
+
+def _raw_message(message: EmailMessage) -> str:
     raw_bytes = message.as_bytes()
     raw = base64.urlsafe_b64encode(raw_bytes).decode("utf-8")
+    return raw
+
+
+def build_draft_payload(to_email: str, subject: str, body: str, from_email: str = "") -> Dict[str, Any]:
+    message = _build_email_message(to_email, subject, body, from_email=from_email)
+    raw = _raw_message(message)
     return {"message": {"raw": raw}}
 
 
-def create_draft(to_email: str, subject: str, body: str) -> Dict[str, Any]:
+def build_send_payload(to_email: str, subject: str, body: str, from_email: str = "") -> Dict[str, Any]:
+    message = _build_email_message(to_email, subject, body, from_email=from_email)
+    raw = _raw_message(message)
+    return {"raw": raw}
+
+
+def _label_artifact(message_id: str, thread_id: str, label_name: str) -> None:
+    if not label_name:
+        return
+    label_id = ensure_gmail_label(label_name)
+    if not label_id:
+        print(f"Warning: Gmail label '{label_name}' could not be created or found.")
+        return
+
     service = get_gmail_service()
-    payload = build_draft_payload(to_email, subject, body)
-    return service.users().drafts().create(userId="me", body=payload).execute()
+    try:
+        if thread_id:
+            service.users().threads().modify(
+                userId="me",
+                id=thread_id,
+                body={"addLabelIds": [label_id]},
+            ).execute()
+            print(f"Applied Gmail label '{label_name}' to thread {thread_id}.")
+            return
+        if message_id:
+            service.users().messages().modify(
+                userId="me",
+                id=message_id,
+                body={"addLabelIds": [label_id]},
+            ).execute()
+            print(f"Applied Gmail label '{label_name}' to message {message_id}.")
+    except Exception as exc:
+        print(f"Warning: could not apply Gmail label '{label_name}': {exc}")
+
+
+def create_draft(to_email: str, subject: str, body: str, from_email: str = "", label_name: str = "") -> Dict[str, Any]:
+    service = get_gmail_service()
+    payload = build_draft_payload(to_email, subject, body, from_email=from_email)
+    draft = service.users().drafts().create(userId="me", body=payload).execute()
+    draft_message = draft.get("message", {})
+    _label_artifact(draft_message.get("id", ""), draft_message.get("threadId", ""), label_name)
+    return draft
+
+
+def send_email_message(to_email: str, subject: str, body: str, from_email: str = "", label_name: str = "") -> Dict[str, Any]:
+    service = get_gmail_service()
+    payload = build_send_payload(to_email, subject, body, from_email=from_email)
+    sent = service.users().messages().send(userId="me", body=payload).execute()
+    _label_artifact(sent.get("id", ""), sent.get("threadId", ""), label_name)
+    return sent

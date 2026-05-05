@@ -3,7 +3,7 @@ name: Outreach Daily
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 14 * * 1-5'
+    - cron: '0 14 * * 6'
 
 permissions:
   contents: read
@@ -20,12 +20,31 @@ jobs:
       MAX_PLACES_RESULTS_PER_LOCATION: ${{ secrets.MAX_PLACES_RESULTS_PER_LOCATION }}
       MAX_TOTAL_CANDIDATES: ${{ secrets.MAX_TOTAL_CANDIDATES }}
       MAX_DRAFTS_PER_RUN: ${{ secrets.MAX_DRAFTS_PER_RUN }}
-      CREATE_GMAIL_DRAFTS: ${{ secrets.CREATE_GMAIL_DRAFTS }}
+      CREATE_GMAIL_DRAFTS: "true"
       GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
       GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
       GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
-      DRY_RUN: ${{ secrets.DRY_RUN }}
-      SEND_EMAILS: "false"
+      GMAIL_SEND_AS_EMAIL: brian@anvisco.com
+      GMAIL_LABEL: Anvis/Leads
+      SEND_MODE: auto_draft
+      AUTO_SEND_FIRST_EMAILS: "false"
+      REQUIRE_ADMIN_APPROVAL_FOR_SEND: "true"
+      COUNTRY_SCOPE: Canada
+      ACTIVE_PROVINCE: Ontario
+      ACTIVE_CITY: Toronto
+      ONE_CITY_PER_RUN: "true"
+      CITY_DUPLICATE_RATE_LIMIT: "0.70"
+      CITY_MIN_USABLE_EMAIL_RATE: "0.15"
+      CITY_WEAK_BATCH_LIMIT: "3"
+      CITY_TARGET_USABLE_LEADS: "300"
+      MAX_DAILY_PLACES_REQUESTS: "1000"
+      MAX_WEEKLY_PLACES_REQUESTS: "3000"
+      MAX_MONTHLY_PLACES_REQUESTS: "10000"
+      MAX_WEEKLY_RAW_PLACE_RESULTS: "1000"
+      MAX_WEEKLY_PLACE_DETAILS_CALLS: "750"
+      MAX_WEEKLY_UNIQUE_LEADS: "300"
+      MAX_WEEKLY_GMAIL_DRAFTS: "75"
+      DRY_RUN: "false"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

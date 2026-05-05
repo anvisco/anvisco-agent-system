@@ -19,7 +19,7 @@ python agents/setup_gmail_credentials.py
 
 The first successful OAuth run creates `credentials/gmail_token.json`.
 
-This system only creates Gmail drafts. It does not send emails automatically.
+This system creates Gmail drafts by default. Auto-send is only possible when the gated mode is explicitly enabled and every safety condition passes.
 
 # Lead Scraper
 
@@ -41,9 +41,9 @@ npm run outreach:daily
 
 This runs, in order:
 
-1. Lead scraper
+1. Canada-only lead scraper
 2. Notion validation
-3. Email 1 draft creation
+3. Email 1 draft creation or gated send
 4. Gmail reply checker
 5. Follow-up draft checker
 6. Daily log writing under `logs/`
@@ -55,6 +55,7 @@ npm run outreach:daily -- --dry-run
 ```
 
 Dry run sets `DRY_RUN=true` and `CREATE_GMAIL_DRAFTS=false`, so it prints what would happen without writing to Notion or Gmail.
+The default non-dry-run behavior is Auto-Draft + Label.
 
 Dry run with Notion writes but no Gmail drafts:
 
@@ -71,7 +72,7 @@ npm run replies:check
 npm run followups:check
 ```
 
-The system never sends email automatically. Gmail is used only to create drafts and detect replies.
+The system uses Gmail for drafts, reply detection, and labeled outreach records. It does not auto-send unless the gated mode is explicitly enabled.
 
 For GitHub Actions, add these repository secrets:
 
@@ -84,11 +85,13 @@ For GitHub Actions, add these repository secrets:
 - `GMAIL_CLIENT_SECRET`
 - `GMAIL_REFRESH_TOKEN`
 
-The workflow file is `.github/workflows/outreach-daily.yml`. It runs once per weekday morning and can also be triggered manually.
+The workflow file is `.github/workflows/outreach-daily.yml`. It runs once on the weekend and can also be triggered manually.
 
 Gmail OAuth for scheduled runs must include:
 
 - `https://www.googleapis.com/auth/gmail.compose`
 - `https://www.googleapis.com/auth/gmail.readonly`
+- `https://www.googleapis.com/auth/gmail.send`
+- `https://www.googleapis.com/auth/gmail.settings.basic`
 
 If your existing local `credentials/gmail_token.json` was created before reply detection was added, delete it and rerun the Gmail setup so the token includes the readonly scope.

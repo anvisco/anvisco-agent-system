@@ -8,7 +8,7 @@ load_dotenv()
 
 
 def _as_bool(value: str | None, default: bool = False) -> bool:
-    if value is None:
+    if value is None or not value.strip():
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
@@ -28,6 +28,11 @@ class Settings:
     gmail_client_id: str
     gmail_client_secret: str
     gmail_refresh_token: str
+    gmail_send_as_email: str
+    gmail_label: str
+    send_mode: str
+    auto_send_first_emails: bool
+    require_admin_approval_for_send: bool
     dry_run: bool
     create_gmail_drafts: bool
     daily_lead_limit: int
@@ -41,7 +46,12 @@ settings = Settings(
     gmail_client_id=os.getenv("GMAIL_CLIENT_ID", "").strip(),
     gmail_client_secret=os.getenv("GMAIL_CLIENT_SECRET", "").strip(),
     gmail_refresh_token=os.getenv("GMAIL_REFRESH_TOKEN", "").strip(),
+    gmail_send_as_email=os.getenv("GMAIL_SEND_AS_EMAIL", "brian@anvisco.com").strip(),
+    gmail_label=os.getenv("GMAIL_LABEL", "Anvis/Leads").strip(),
+    send_mode=os.getenv("SEND_MODE", "auto_draft").strip().lower(),
+    auto_send_first_emails=_as_bool(os.getenv("AUTO_SEND_FIRST_EMAILS"), default=False),
+    require_admin_approval_for_send=_as_bool(os.getenv("REQUIRE_ADMIN_APPROVAL_FOR_SEND"), default=True),
     dry_run=_as_bool(os.getenv("DRY_RUN"), default=True),
-    create_gmail_drafts=_as_bool(os.getenv("CREATE_GMAIL_DRAFTS"), default=False),
+    create_gmail_drafts=_as_bool(os.getenv("CREATE_GMAIL_DRAFTS"), default=True),
     daily_lead_limit=_as_int(os.getenv("DAILY_LEAD_LIMIT"), default=25),
 )
