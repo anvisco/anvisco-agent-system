@@ -141,6 +141,10 @@ The public site should route users into one of three paths:
 - Checkout or offers
 - Client Login
 
+Prospect-facing handoff wording:
+
+After checkout, you'll receive access to your client portal. Use the same email you used during checkout. From there, you'll be able to view your package, project stage, payment details, and updates.
+
 The paid-client handoff should work as follows:
 
 1. User checks out through Stripe Checkout.
@@ -176,6 +180,7 @@ The workflow should enforce these constraints:
 - Do not move a lead into client records without confirmed payment.
 - Do not bypass webhook confirmation for paid-client creation.
 - Do not use a client email different from the checkout email for portal access.
+- If portal access fails, first check whether the checkout email and portal login email match.
 - Do not treat test-client data as production data.
 - Do not invent pricing or package details in automation logic.
 - Do not overwrite manual review fields unless the workflow explicitly allows it.
@@ -203,4 +208,3 @@ This is the only state model the automation should depend on until a future revi
 - No pricing definition
 - No new dashboard design
 - No replacement of the current CRM split between Notion and Supabase
-

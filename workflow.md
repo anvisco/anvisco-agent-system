@@ -1,4 +1,4 @@
-# Anvisco Workflow
+# Anvis Workflow
 
 Last updated: 2026-04-29
 
@@ -108,7 +108,7 @@ Hello [Practice Name],
 
 I build websites that run, grow, and optimize your business.
 
-You can check out some of my work here: https://www.anvisco.com
+You can check out some of my work here: https://anvisco.com
 
 I took a quick look at your website and you already have a solid foundation. [Mention what works.]
 
@@ -164,7 +164,7 @@ When a deal closes:
 
 1. Move the lead to Client.
 2. Create or update client/project record in Notion.
-3. Track package, deposit, remaining balance, and portal link.
+3. Track package, deposit, remaining balance, and portal access details.
 4. Send onboarding draft through Gmail.
 5. Track assets received.
 6. Move through project stages.
@@ -193,11 +193,11 @@ After package selection:
 - Standard: $1,100 deposit, $1,100 remaining
 - Premium: $1,900 deposit, $1,900 remaining
 
-Payment methods:
+Live payment entry point:
 
-- Stripe
-- E-transfer
-- PayPal on request
+- Stripe Checkout
+
+Do not use manual payment links in live prospect copy.
 
 The project should not launch until final payment is marked paid.
 

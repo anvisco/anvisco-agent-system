@@ -1,18 +1,18 @@
-# Anvisco Context
+# Anvis Context
 
 Last updated: 2026-04-29
 
 ## Purpose
 
-Anvisco is Brian Nguyen's personal website service for local businesses. The current go-to-market focus is independent dental clinics across Toronto, North York, Willowdale, Scarborough, Etobicoke, Markham, Vaughan, Richmond Hill, Thornhill, Mississauga, Brampton, East York, York, Leaside, Midtown Toronto, and Downtown Toronto.
+Anvis is Brian Nguyen's personal website service for local businesses. The current go-to-market focus is independent dental clinics across Toronto, North York, Willowdale, Scarborough, Etobicoke, Markham, Vaughan, Richmond Hill, Thornhill, Mississauga, Brampton, East York, York, Leaside, Midtown Toronto, and Downtown Toronto.
 
-The goal is to land the first paid website clients through practical website audits, short personalized outreach, and a credible portfolio at https://www.anvisco.com.
+The goal is to land the first paid website clients through practical website audits, short personalized outreach, and a credible portfolio at https://anvisco.com.
 
 ## Core Positioning
 
 Websites that run your business, not just describe it.
 
-Anvisco should not be framed as generic web design. The stronger angle is helping business owners turn messy offers, operations, booking flows, services, trust signals, and follow-up systems into clear websites that guide visitors toward action.
+Anvis should not be framed as generic web design. The stronger angle is helping business owners turn messy offers, operations, booking flows, services, trust signals, and follow-up systems into clear websites that guide visitors toward action.
 
 Use this lens:
 
@@ -23,7 +23,7 @@ Use this lens:
 
 ## Brand Voice
 
-Anvisco should feel:
+Anvis should feel:
 
 - Personal-first
 - Clear
@@ -125,7 +125,7 @@ Care Plan:
 
 ## Portfolio Proof
 
-Anvisco portfolio should show that Brian builds systems, not just visuals.
+Anvis portfolio should show that Brian builds systems, not just visuals.
 
 Core proof projects:
 
@@ -146,7 +146,7 @@ I build websites that run, grow, and optimize your business.
 
 Default website link:
 
-https://www.anvisco.com
+https://anvisco.com
 
 Default subject for clinic outreach:
 
@@ -175,11 +175,15 @@ The system should never send emails automatically.
 
 ## Website / Client Flow
 
-Current Anvisco website flow:
+Current Anvis website flow:
 
-Pricing page → Checkout page → Payment method → Thank-you page → Project page
+Get Free Audit → /audit
+Offers or build path → /checkout
+Client Login → /portal
 
-There is no backend, admin dashboard, authentication, database-backed portal, or live payment sync yet. Keep the system simple until there are 5-10 active clients.
+Checkout uses Stripe Checkout.
+After payment, the client receives portal access through the paid-client welcome email.
+Portal login uses a magic link and the client must use the same email used at checkout.
 
 Project stages:
 
