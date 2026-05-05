@@ -5,6 +5,7 @@ from typing import Any, Dict
 from .auditor import audit_lead
 from .config import settings
 from .lead_finder import find_local_leads
+from .lead_finder import resolve_active_city_context
 from .logger import DailyLogger
 from .models import AuditedLead, FoundLead
 from .notion_writer import (
@@ -49,6 +50,52 @@ def _is_valid_for_write(audited: AuditedLead) -> tuple[bool, str]:
     return True, ""
 
 
+def _validate_quota_settings() -> None:
+    caps = {
+        "MAX_DAILY_PLACES_REQUESTS": settings.max_daily_places_requests,
+        "MAX_WEEKLY_PLACES_REQUESTS": settings.max_weekly_places_requests,
+        "MAX_MONTHLY_PLACES_REQUESTS": settings.max_monthly_places_requests,
+        "MAX_WEEKLY_RAW_PLACE_RESULTS": settings.max_weekly_raw_place_results,
+        "MAX_WEEKLY_PLACE_DETAILS_CALLS": settings.max_weekly_place_details_calls,
+        "MAX_WEEKLY_UNIQUE_LEADS": settings.max_weekly_unique_leads,
+        "MAX_WEEKLY_GMAIL_DRAFTS": settings.max_weekly_gmail_drafts,
+    }
+    for name, value in caps.items():
+        if value <= 0:
+            raise ValueError(f"{name} must be a positive integer.")
+    if settings.max_places_results_per_location > settings.max_daily_places_requests:
+        raise ValueError("MAX_PLACES_RESULTS_PER_LOCATION cannot exceed MAX_DAILY_PLACES_REQUESTS.")
+    if settings.max_new_leads_per_run > settings.max_weekly_unique_leads:
+        print(
+            "Warning: MAX_NEW_LEADS_PER_RUN exceeds MAX_WEEKLY_UNIQUE_LEADS. "
+            "The run will still honor the per-run cap, but the weekly target is lower."
+        )
+
+
+def _city_metrics_line(logger: DailyLogger, accepted_count: int, active_city: str, active_province: str) -> str:
+    candidates_processed = logger.counters.get("candidates_processed", 0)
+    duplicates_skipped = logger.counters.get("duplicates_skipped", 0)
+    leads_scraped = logger.counters.get("leads_scraped", 0)
+    usable_email_leads = logger.counters.get("usable_email_leads", 0)
+    duplicate_rate = (duplicates_skipped / candidates_processed) if candidates_processed else 0.0
+    usable_email_rate = (usable_email_leads / leads_scraped) if leads_scraped else 0.0
+
+    if accepted_count >= settings.city_target_usable_leads:
+        recommendation = f"city target reached for {active_city}"
+    elif duplicate_rate > settings.city_duplicate_rate_limit:
+        recommendation = f"city looks saturated for {active_city}"
+    elif usable_email_rate < settings.city_min_usable_email_rate:
+        recommendation = f"usable email rate is weak for {active_city}"
+    else:
+        recommendation = f"keep {active_city} active"
+
+    return (
+        f"City metrics | province={active_province} | city={active_city} | "
+        f"duplicate_rate={duplicate_rate:.2%} | usable_email_rate={usable_email_rate:.2%} | "
+        f"recommendation={recommendation}"
+    )
+
+
 def _skip_duplicate_if_needed(found: FoundLead, existing_pages: list[Dict[str, Any]], logger: DailyLogger) -> bool:
     domain = normalize_domain(found.website)
     duplicate = find_duplicate_by_keys(
@@ -80,10 +127,23 @@ def _skip_duplicate_if_needed(found: FoundLead, existing_pages: list[Dict[str, A
 def run_daily_scrape() -> None:
     logger = DailyLogger()
     logger.event("Starting lead scraper daily run")
+    _validate_quota_settings()
+    active_city, active_province = resolve_active_city_context()
     logger.event(f"DRY_RUN: {settings.dry_run}")
+    logger.event(f"Country scope: {settings.country_scope}")
+    logger.event(f"Active province: {active_province}")
+    logger.event(f"Active city: {active_city}")
+    logger.event(f"One city per run: {settings.one_city_per_run}")
     logger.event(f"MAX_NEW_LEADS_PER_RUN: {settings.max_new_leads_per_run}")
     logger.event(f"MAX_PLACES_RESULTS_PER_LOCATION: {settings.max_places_results_per_location}")
     logger.event(f"MAX_TOTAL_CANDIDATES: {settings.max_total_candidates}")
+    logger.event(f"MAX_DAILY_PLACES_REQUESTS: {settings.max_daily_places_requests}")
+    logger.event(f"MAX_WEEKLY_PLACES_REQUESTS: {settings.max_weekly_places_requests}")
+    logger.event(f"MAX_MONTHLY_PLACES_REQUESTS: {settings.max_monthly_places_requests}")
+    logger.event(f"MAX_WEEKLY_RAW_PLACE_RESULTS: {settings.max_weekly_raw_place_results}")
+    logger.event(f"MAX_WEEKLY_PLACE_DETAILS_CALLS: {settings.max_weekly_place_details_calls}")
+    logger.event(f"MAX_WEEKLY_UNIQUE_LEADS: {settings.max_weekly_unique_leads}")
+    logger.event(f"MAX_WEEKLY_GMAIL_DRAFTS: {settings.max_weekly_gmail_drafts}")
     logger.count("target_new_leads_requested", settings.max_new_leads_per_run)
     logger.event(f"Google Places API key present: {'yes' if settings.google_places_api_key else 'no'}")
     logger.event(f"Notion API key present: {'yes' if settings.notion_api_key else 'no'}")
@@ -144,6 +204,8 @@ def run_daily_scrape() -> None:
             logger.event(f"Scraped lead: {found.business_name} ({domain})")
             if not scraped.email:
                 logger.event("No email found on website")
+            else:
+                logger.count("usable_email_leads")
             audited = audit_lead(found, scraped)
             duplicate = find_duplicate(audited, existing_pages)
             if duplicate:
@@ -197,6 +259,8 @@ def run_daily_scrape() -> None:
             f"{min(len(found_leads), settings.max_total_candidates)} candidates; "
             f"reason: {reason}"
         )
+
+    logger.event(_city_metrics_line(logger, accepted_count, active_city, active_province))
 
     logger.event("Lead scraper daily run complete")
     logger.write()

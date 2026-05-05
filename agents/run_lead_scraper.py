@@ -10,7 +10,7 @@ from lead_scraper.src.index import run_daily_scrape
 
 
 if __name__ == "__main__":
-    print("Running Anvisco lead scraper agent")
+    print("Running Anvis lead scraper agent")
     print("Secrets are reported as present yes/no only; secret values are never printed.")
     print(f"DRY_RUN value: {settings.dry_run}")
     print(f"MAX_NEW_LEADS_PER_RUN: {settings.max_new_leads_per_run}")

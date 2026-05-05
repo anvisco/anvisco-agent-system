@@ -70,6 +70,16 @@ function childEnv(options: CliOptions): NodeJS.ProcessEnv {
   } else if (options.write) {
     env.DRY_RUN = "false";
   }
+  if (!env.CREATE_GMAIL_DRAFTS) env.CREATE_GMAIL_DRAFTS = "true";
+  if (!env.SEND_MODE) env.SEND_MODE = "auto_draft";
+  if (!env.AUTO_SEND_FIRST_EMAILS) env.AUTO_SEND_FIRST_EMAILS = "false";
+  if (!env.REQUIRE_ADMIN_APPROVAL_FOR_SEND) env.REQUIRE_ADMIN_APPROVAL_FOR_SEND = "true";
+  if (!env.GMAIL_LABEL) env.GMAIL_LABEL = "Anvis/Leads";
+  if (!env.GMAIL_SEND_AS_EMAIL) env.GMAIL_SEND_AS_EMAIL = "brian@anvisco.com";
+  if (!env.COUNTRY_SCOPE) env.COUNTRY_SCOPE = "Canada";
+  if (!env.ACTIVE_PROVINCE) env.ACTIVE_PROVINCE = "Ontario";
+  if (!env.ACTIVE_CITY) env.ACTIVE_CITY = "Toronto";
+  if (!env.ONE_CITY_PER_RUN) env.ONE_CITY_PER_RUN = "true";
   return env;
 }
 
@@ -120,7 +130,7 @@ function main(): void {
   const options = parseArgs(process.argv.slice(2));
   mkdirSync(LOG_DIR, { recursive: true });
   log(`Outreach daily automation started | step=${options.step} | dryRun=${options.dryRun} | write=${options.write}`);
-  log("Safety policy: Gmail drafts only. No automatic email sending.");
+  log("Safety policy: Gmail drafts by default. Auto-send is gated and disabled unless explicitly configured.");
 
   let failures = 0;
   for (const phase of phasesForStep(options.step)) {

@@ -11,7 +11,8 @@ TEST_LEAD = {
     "Practice Name": "TEST Dental Clinic",
     "Website": "https://example.com",
     "Email": "test@example.com",
-    "Outreach Status": "New Lead",
+    "Lead Status": "audit_ready",
+    "Outreach Status": "draft_ready",
     "Source": "Codex Notion Test",
 }
 

@@ -62,6 +62,27 @@ class AuditedLead:
     website_status: str
     source: str
     scrape_notes: str
+    country: str = "Canada"
+    province: str = ""
+    subject_angle: str = ""
+    clinic_strengths: str = ""
+    strongest_advantage: str = ""
+    patient_type_location_angle: str = ""
+    top_3_issues: str = ""
+    business_impact: str = ""
+    recommended_fix: str = ""
+    email_angle: str = ""
+    loom_link: str = ""
+    send_mode: str = "auto_draft"
+    auto_send_eligible: bool = False
+    duplicate_status: str = "Unique"
+    duplicate_reason: str = ""
+    gmail_match_status: str = ""
+    gmail_draft_id: str = ""
+    gmail_thread_id: str = ""
+    gmail_sent_status: str = ""
+    admin_approved: bool = False
+    casl_basis: str = ""
     contact_page_url: str = ""
     booking_url: str = ""
     languages: str = ""

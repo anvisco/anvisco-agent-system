@@ -1,29 +1,29 @@
-# Anvisco Context
+# Anvis Context
 
-Last updated: 2026-04-29
+Last updated: 2026-05-05
 
 ## Purpose
 
-Anvisco is Brian Nguyen's personal website service for local businesses. The current go-to-market focus is independent dental clinics across Toronto, North York, Willowdale, Scarborough, Etobicoke, Markham, Vaughan, Richmond Hill, Thornhill, Mississauga, Brampton, East York, York, Leaside, Midtown Toronto, and Downtown Toronto.
+Anvis is Brian Nguyen's website service for local businesses. The current focus is independent dental clinics and other local service businesses in Canada, starting with Toronto and Ontario.
 
-The goal is to land the first paid website clients through practical website audits, short personalized outreach, and a credible portfolio at https://www.anvisco.com.
+The goal is to land the first paid website clients through practical website audits, short personalized outreach, and a credible portfolio at https://anvisco.com.
 
 ## Core Positioning
 
-Websites that run your business, not just describe it.
+Websites that run, grow, and get discovered.
 
-Anvisco should not be framed as generic web design. The stronger angle is helping business owners turn messy offers, operations, booking flows, services, trust signals, and follow-up systems into clear websites that guide visitors toward action.
+Anvis should be framed as a practical website partner, not a generic design shop. The angle is helping local businesses turn messy offers, booking flows, trust signals, and follow-up paths into clear websites that help visitors decide.
 
 Use this lens:
 
 - A website is not just a brochure.
 - A website should support how the business actually operates.
 - Many website problems are flow problems, not just design problems.
-- The fix is often clearer structure, better conversion flow, and cleaner patient action paths.
+- The fix is often clearer structure, better conversion flow, and cleaner local discovery signals.
 
 ## Brand Voice
 
-Anvisco should feel:
+Anvis should feel:
 
 - Personal-first
 - Clear
@@ -36,10 +36,10 @@ Anvisco should feel:
 
 Use:
 
-- “I” instead of “we”
-- “Here is what I noticed” instead of “your website is bad”
-- “Flow problem” instead of “design problem”
-- “Fixable without rebuilding everything” when true
+- "I" instead of "we"
+- "Here is what I noticed" instead of "your website is bad"
+- "Flow problem" instead of "design problem"
+- "Fixable without rebuilding everything" when true
 
 Avoid:
 
@@ -58,17 +58,16 @@ Primary niche:
 
 - Independent dental clinics
 - Toronto-area dental clinics
-- Clinics with established practices, strong reviews, and websites with visible room for improvement
+- Local service businesses with strong reputations and websites that still leave room for clarity improvements
 
 Strong lead indicators:
 
 - Outdated website sections
 - Broken or expired testimonial widgets
-- Old COVID messaging
 - Weak booking flow
 - No clear patient journey
 - Content-heavy layout
-- Missing multilingual translation
+- Missing multilingual support
 - High-value services presented weakly
 - Multiple locations or services causing confusion
 - Good clinic reputation but underperforming website
@@ -79,78 +78,26 @@ Primary services:
 
 - Website redesign
 - Conversion optimization
-- Patient booking flow improvement
+- Booking flow improvement
 - Multilingual website translation
 - Service page organization
 - Trust-signal cleanup
-- Online booking integration
 - Website speed and mobile experience improvement
 - Funnel and system improvement
-
-## Packages
-
-Essentials:
-
-- $1,200 CAD founding price
-- $600 deposit
-- $600 remaining
-- Up to 5 pages
-- 7-day delivery
-
-Standard:
-
-- $2,200 CAD founding price
-- $1,100 deposit
-- $1,100 remaining
-- Up to 10 pages
-- Online booking integration where possible
-- 1 additional language
-- 10-day delivery
-
-Premium:
-
-- $3,800 CAD founding price
-- $1,900 deposit
-- $1,900 remaining
-- Custom features where needed
-- Up to 2 additional languages
-- First month of care plan included
-- 14-day delivery
-
-Care Plan:
-
-- $149/month
-- Available after launch
-- Hosting, updates, monitoring, backups, and priority response
-
-## Portfolio Proof
-
-Anvisco portfolio should show that Brian builds systems, not just visuals.
-
-Core proof projects:
-
-- Do Good Society: systems and engagement
-- Immigrant Women in Business: operations and continuity
-- Purpose Driven Transformations: scale and investment
-- RTG Group: corporate and partnership credibility
-
-The portfolio should help a business owner quickly think:
-
-“This person can fix my website.”
 
 ## Outreach Rules
 
 Default outreach opening:
 
-I build websites that run, grow, and optimize your business.
+I build websites that run, grow, and get discovered.
 
 Default website link:
 
-https://www.anvisco.com
+https://anvisco.com
 
 Default subject for clinic outreach:
 
-Web design services to improve conversion
+Use a personalized subject tied to the strongest missed signal.
 
 Rules:
 
@@ -158,8 +105,8 @@ Rules:
 - Mention the clinic name.
 - Compliment what is already working.
 - Mention one specific issue or opportunity.
-- Mention multilingual translation when relevant.
-- Do not include a signature.
+- Mention multilingual support when relevant.
+- Do not include a signature unless the generated template already includes the approved signature block.
 - Do not use em dashes.
 - Do not mention Loom unless a Loom link exists.
 - Do not overpromise ROI.
@@ -169,27 +116,33 @@ Rules:
 Use only these operating tools for the automation system:
 
 - Notion: source of truth for leads, deals, clients, projects, notes, and status
-- Gmail: draft emails only, manually reviewed and sent by Brian
+- Gmail: draft emails only by default, with manual review before sending
 
-The system should never send emails automatically.
+The system should not auto-send unless the gated mode is explicitly enabled.
 
 ## Website / Client Flow
 
-Current Anvisco website flow:
+Current Anvis website flow:
 
-Pricing page → Checkout page → Payment method → Thank-you page → Project page
+- Get Free Audit -> `/audit`
+- Offers / build path -> `/checkout`
+- Client Login -> `/portal`
 
-There is no backend, admin dashboard, authentication, database-backed portal, or live payment sync yet. Keep the system simple until there are 5-10 active clients.
+Checkout uses Stripe Checkout.
+Paid clients receive portal access by welcome email after payment.
+Portal login uses the same email that was used at checkout.
 
-Project stages:
+The system should not use manual payment links.
 
-1. Lead
-2. Discovery Booked
-3. Deposit Pending
-4. Project Confirmed
-5. Onboarding
-6. Build in Progress
-7. Review
-8. Final Payment
-9. Launched
-10. Care Plan
+## Review Checkpoints
+
+Brian should manually review:
+
+- New lead quality
+- Outreach email before sending
+- Follow-ups before sending
+- Replies before response
+- Package recommendation before proposal
+- Deposit status before project confirmation
+- Final payment before launch
+- Any manual client status change

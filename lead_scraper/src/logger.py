@@ -27,6 +27,7 @@ class DailyLogger:
             "no_website_skipped": 0,
             "low_score_skipped": 0,
             "leads_scraped": 0,
+            "usable_email_leads": 0,
             "errors": 0,
         }
     )
@@ -77,6 +78,7 @@ class DailyLogger:
         print(f"- duplicates found: {self.counters.get('duplicates_found', 0)}")
         print(f"- duplicates skipped: {self.counters.get('duplicates_skipped', 0)}")
         print(f"- leads scraped: {self.counters.get('leads_scraped', 0)}")
+        print(f"- usable email leads: {self.counters.get('usable_email_leads', 0)}")
         print(f"- leads that would be inserted in dry run: {self.counters.get('would_insert', 0)}")
         print(f"- leads that would be updated in dry run: {self.counters.get('would_update', 0)}")
         print(f"- new leads inserted: {self.counters.get('new_inserted', 0)}")

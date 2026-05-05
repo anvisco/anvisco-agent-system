@@ -11,7 +11,7 @@ from notion_client import Client
 
 from src.config import settings
 from src.email_writer import generate_email_sequence
-from src.gmail_client import create_draft
+from src.gmail_client import create_draft, is_verified_send_as_alias, send_email_message
 from src.notion_client import get_data_source_schema, get_database_and_data_source
 
 
@@ -42,6 +42,7 @@ def _min_drafts_target(max_drafts: int) -> int:
 
 
 MIN_DRAFTS_TARGET = _min_drafts_target(MAX_DRAFTS_PER_RUN)
+STATUS_FIELD_CANDIDATES = ["Lead Status", "Outreach Status"]
 OUTREACH_STATUS_FIELD_CANDIDATES = ["Outreach Status"]
 NAME_FIELD_CANDIDATES = ["Business Name", "Practice Name", "Clinic Name", "Name"]
 EMAIL_FIELD_CANDIDATES = ["Email", "Contact Email"]
@@ -55,8 +56,8 @@ EMAIL_3_DRAFT_CANDIDATES = ["Email 3 Draft"]
 DRAFT_CREATED_DATE_CANDIDATES = ["Draft Created Date"]
 EMAIL_1_DATE_CANDIDATES = ["Email 1 Date"]
 TIER_CANDIDATES = ["Tier"]
-TOP_ISSUE_CANDIDATES = ["Top Issue"]
-OUTREACH_ANGLE_CANDIDATES = ["Outreach Angle"]
+TOP_ISSUE_CANDIDATES = ["Top 3 Issues", "Top Issue"]
+OUTREACH_ANGLE_CANDIDATES = ["Email Angle", "Outreach Angle"]
 WEBSITE_CANDIDATES = ["Website"]
 RECOMMENDED_OFFER_CANDIDATES = ["Recommended Offer"]
 LEAD_QUALITY_SCORE_CANDIDATES = ["Lead Quality Score"]
@@ -64,20 +65,45 @@ ANGLE_BUCKET_CANDIDATES = ["Angle Bucket"]
 LOOM_RECOMMENDED_CANDIDATES = ["Loom Recommended"]
 LOOM_SCRIPT_CANDIDATES = ["Loom Script"]
 SEQUENCE_STEP_CANDIDATES = ["Sequence Step"]
-LAST_OUTREACH_DATE_CANDIDATES = ["Last Outreach Date"]
+LAST_OUTREACH_DATE_CANDIDATES = ["Last Email Sent At", "Last Outreach Date"]
 NEXT_FOLLOW_UP_DATE_CANDIDATES = ["Next Follow-up Date", "Next Follow Up Date"]
 REPLY_STATUS_CANDIDATES = ["Reply Status"]
 GMAIL_DRAFT_ID_CANDIDATES = ["Gmail Draft ID"]
 GMAIL_THREAD_ID_CANDIDATES = ["Gmail Thread ID"]
 SCRAPE_NOTES_CANDIDATES = ["Scrape Notes"]
+COUNTRY_CANDIDATES = ["Country"]
+PROVINCE_CANDIDATES = ["Province"]
+SUBJECT_ANGLE_CANDIDATES = ["Subject Angle", "Email Angle"]
+CLINIC_STRENGTHS_CANDIDATES = ["Clinic Strengths"]
+STRONGEST_ADVANTAGE_CANDIDATES = ["Strongest Advantage"]
+PATIENT_TYPE_LOCATION_ANGLE_CANDIDATES = ["Patient Type / Location Angle"]
+TOP_3_ISSUES_CANDIDATES = ["Top 3 Issues"]
+BUSINESS_IMPACT_CANDIDATES = ["Business Impact"]
+RECOMMENDED_FIX_CANDIDATES = ["Recommended Fix"]
+EMAIL_ANGLE_CANDIDATES = ["Email Angle"]
+LOOM_LINK_CANDIDATES = ["Loom Link"]
+DUPLICATE_STATUS_CANDIDATES = ["Duplicate Status"]
+GMAIL_MATCH_STATUS_CANDIDATES = ["Gmail Match Status"]
+GMAIL_SENT_STATUS_CANDIDATES = ["Gmail Sent Status"]
+ADMIN_APPROVED_CANDIDATES = ["Admin Approved"]
+CASL_BASIS_CANDIDATES = ["CASL Basis"]
+SEND_MODE_CANDIDATES = ["Send Mode"]
+AUTO_SEND_ELIGIBLE_CANDIDATES = ["Auto-Send Eligible"]
+LAST_EMAIL_DRAFTED_AT_CANDIDATES = ["Last Email Drafted At"]
+LAST_EMAIL_SENT_AT_CANDIDATES = ["Last Email Sent At", "Last Outreach Date"]
+FOLLOW_UP_DUE_NOW_CANDIDATES = ["Follow-Up Due Now"]
+
+CANADA_COUNTRY = "canada"
+TERMINAL_LEAD_STATUSES = {"not_fit"}
+BLOCKED_DUPLICATE_STATUSES = {"possible_duplicate", "duplicate", "already_contacted", "do_not_contact"}
 
 STAGE_NEW_LEADS = "new_leads"
 STAGE_BACKFILL = "backfill"
 STAGE_FALLBACK = "fallback"
 STAGE_CONFIGS = (
-    (STAGE_NEW_LEADS, ("New Lead",), True, True),
-    (STAGE_BACKFILL, ("New Lead", "Draft Ready"), True, True),
-    (STAGE_FALLBACK, ("New Lead", "Draft Ready"), False, False),
+    (STAGE_NEW_LEADS, ("audit_ready", "draft_ready", "New Lead", "Draft Ready"), True, True),
+    (STAGE_BACKFILL, ("audit_ready", "draft_ready", "New Lead", "Draft Ready"), True, True),
+    (STAGE_FALLBACK, ("audit_ready", "draft_ready", "New Lead", "Draft Ready"), False, False),
 )
 
 
@@ -155,6 +181,87 @@ def _get_date_value(property_value: Dict[str, Any]) -> Optional[date]:
         return None
 
 
+def _get_formula_value(property_value: Dict[str, Any]) -> Any:
+    if not property_value:
+        return None
+    formula = property_value.get("formula")
+    if not isinstance(formula, dict):
+        return None
+    if formula.get("type") == "boolean":
+        return formula.get("boolean")
+    if formula.get("type") == "number":
+        return formula.get("number")
+    if formula.get("type") == "string":
+        return formula.get("string")
+    if formula.get("type") == "date":
+        return formula.get("date")
+    return None
+
+
+def _is_true_like(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "1"}
+    return False
+
+
+def _normalized_text_value(lead: Dict[str, Any], candidates: List[str]) -> str:
+    return _lead_text_value(lead, candidates).strip().lower()
+
+
+def _lead_is_canada(lead: Dict[str, Any]) -> bool:
+    country = _normalized_text_value(lead, COUNTRY_CANDIDATES)
+    return country == CANADA_COUNTRY
+
+
+def _lead_has_terminal_status(lead: Dict[str, Any]) -> bool:
+    lead_status = _normalized_text_value(lead, STATUS_FIELD_CANDIDATES)
+    return lead_status in TERMINAL_LEAD_STATUSES
+
+
+def _lead_duplicate_status(lead: Dict[str, Any]) -> str:
+    return _normalized_text_value(lead, DUPLICATE_STATUS_CANDIDATES)
+
+
+def _lead_gmail_match_status(lead: Dict[str, Any]) -> str:
+    return _normalized_text_value(lead, GMAIL_MATCH_STATUS_CANDIDATES)
+
+
+def _draft_block_reasons(
+    lead: Dict[str, Any],
+    *,
+    require_unique_duplicate: bool,
+    require_gmail_match_no_match: bool,
+) -> List[str]:
+    reasons: List[str] = []
+
+    if _lead_has_terminal_status(lead):
+        reasons.append("Lead Status is not_fit")
+
+    country = _lead_text_value(lead, COUNTRY_CANDIDATES)
+    if country and country.lower() != "canada":
+        reasons.append(f"Country is {country}")
+    elif not country:
+        reasons.append("Country is missing")
+
+    duplicate_status = _lead_duplicate_status(lead)
+    if require_unique_duplicate:
+        if duplicate_status != "unique":
+            reasons.append(f"Duplicate Status is {duplicate_status or '<empty>'}")
+    elif duplicate_status in BLOCKED_DUPLICATE_STATUSES:
+        reasons.append(f"Duplicate Status is {duplicate_status}")
+
+    if require_gmail_match_no_match:
+        gmail_match_status = _lead_gmail_match_status(lead)
+        if gmail_match_status != "no_match":
+            reasons.append(f"Gmail Match Status is {gmail_match_status or '<empty>'}")
+
+    return reasons
+
+
 def _first_existing_property_name(properties: Dict[str, Any], candidates: List[str]) -> Optional[str]:
     for candidate in candidates:
         if candidate in properties:
@@ -199,10 +306,10 @@ def _build_query_filter(
 ) -> Optional[Dict[str, Any]]:
     filter_parts: List[Dict[str, Any]] = []
 
-    outreach_status_property = _first_existing_property_name(properties, OUTREACH_STATUS_FIELD_CANDIDATES)
+    outreach_status_property = _first_existing_property_name(properties, STATUS_FIELD_CANDIDATES)
     if not outreach_status_property:
         _print_available_properties(properties)
-        raise ValueError("Outreach Status property is missing from the Notion data source.")
+        raise ValueError("Lead Status / Outreach Status property is missing from the Notion data source.")
     _print_detected_fields(properties, [outreach_status_property], "outreach status field")
     status_filter = _build_status_filter(
         outreach_status_property,
@@ -211,6 +318,40 @@ def _build_query_filter(
     )
     if status_filter:
         filter_parts.append(status_filter)
+
+    lead_status_property = _first_existing_property_name(properties, ["Lead Status"])
+    if lead_status_property:
+        _print_detected_fields(properties, [lead_status_property], "lead status field")
+        lead_status_filter = _build_not_equals_filter(
+            lead_status_property,
+            properties[lead_status_property].get("type"),
+            "not_fit",
+        )
+        if lead_status_filter:
+            filter_parts.append(lead_status_filter)
+
+    country_property = _first_existing_property_name(properties, COUNTRY_CANDIDATES)
+    if country_property:
+        _print_detected_fields(properties, [country_property], "country field")
+        country_filter = _build_equality_filter(
+            country_property,
+            properties[country_property].get("type"),
+            "Canada",
+        )
+        if country_filter:
+            filter_parts.append(country_filter)
+
+    duplicate_status_property = _first_existing_property_name(properties, DUPLICATE_STATUS_CANDIDATES)
+    if duplicate_status_property:
+        _print_detected_fields(properties, [duplicate_status_property], "duplicate status field")
+        for blocked_status in ("possible_duplicate", "duplicate", "already_contacted", "do_not_contact"):
+            duplicate_filter = _build_not_equals_filter(
+                duplicate_status_property,
+                properties[duplicate_status_property].get("type"),
+                blocked_status,
+            )
+            if duplicate_filter:
+                filter_parts.append(duplicate_filter)
 
     gmail_draft_id_property = _first_existing_property_name(properties, GMAIL_DRAFT_ID_CANDIDATES)
     if gmail_draft_id_property:
@@ -320,6 +461,18 @@ def _build_equality_filter(property_name: str, property_type: str, value: str) -
         return {"property": property_name, "rich_text": {"equals": value}}
 
     print(f"Warning: skipping unsupported filter type '{property_type}' for {property_name}")
+    return None
+
+
+def _build_not_equals_filter(property_name: str, property_type: str, value: str) -> Optional[Dict[str, Any]]:
+    if property_type == "status":
+        return {"property": property_name, "status": {"does_not_equal": value}}
+    if property_type == "select":
+        return {"property": property_name, "select": {"does_not_equal": value}}
+    if property_type == "rich_text":
+        return {"property": property_name, "rich_text": {"does_not_equal": value}}
+
+    print(f"Warning: skipping unsupported not-equals filter type '{property_type}' for {property_name}")
     return None
 
 
@@ -453,9 +606,78 @@ def _lead_presence_flag(lead: Dict[str, Any], candidates: List[str]) -> bool:
     return bool(_get_text_value(_get_property(lead, property_name)))
 
 
+def _lead_text_value(lead: Dict[str, Any], candidates: List[str]) -> str:
+    properties = lead.get("properties", {})
+    property_name = _first_existing_property_name(properties, candidates)
+    if not property_name:
+        return ""
+    return _get_text_value(_get_property(lead, property_name))
+
+
+def _lead_text_count(lead: Dict[str, Any], candidates: List[str]) -> int:
+    text = _lead_text_value(lead, candidates)
+    if not text:
+        return 0
+    parts = [part.strip() for part in text.replace("\n", ",").split(",") if part.strip()]
+    return len(parts)
+
+
+def _lead_checkbox_true(lead: Dict[str, Any], candidates: List[str]) -> bool:
+    properties = lead.get("properties", {})
+    property_name = _first_existing_property_name(properties, candidates)
+    if not property_name:
+        return False
+    return _get_checkbox_value(_get_property(lead, property_name))
+
+
+def _existing_gmail_artifact(lead: Dict[str, Any]) -> bool:
+    properties = lead.get("properties", {})
+    draft_property = _first_existing_property_name(properties, GMAIL_DRAFT_ID_CANDIDATES)
+    thread_property = _first_existing_property_name(properties, GMAIL_THREAD_ID_CANDIDATES)
+    sent_status_property = _first_existing_property_name(properties, GMAIL_SENT_STATUS_CANDIDATES)
+    return any(
+        _get_text_value(_get_property(lead, prop_name or ""))
+        for prop_name in (draft_property, thread_property, sent_status_property)
+    )
+
+
+def _auto_send_is_eligible(lead: Dict[str, Any], sequence: Dict[str, Any], alias_verified: bool) -> tuple[bool, List[str]]:
+    reasons: List[str] = []
+    if settings.send_mode != "auto_send_gated":
+        reasons.append("send mode is not auto_send_gated")
+    if not settings.auto_send_first_emails:
+        reasons.append("AUTO_SEND_FIRST_EMAILS is false")
+    if settings.require_admin_approval_for_send and not _lead_checkbox_true(lead, ADMIN_APPROVED_CANDIDATES):
+        reasons.append("Admin Approved is not true")
+    reasons.extend(_draft_block_reasons(lead, require_unique_duplicate=True, require_gmail_match_no_match=True))
+    if _lead_checkbox_true(lead, ["Do Not Contact"]):
+        reasons.append("Do Not Contact is true")
+    casl_basis = _lead_text_value(lead, CASL_BASIS_CANDIDATES)
+    if not casl_basis:
+        reasons.append("CASL Basis is missing")
+    email = _lead_text_value(lead, EMAIL_FIELD_CANDIDATES)
+    if not email:
+        reasons.append("Email is missing")
+    if _existing_gmail_artifact(lead):
+        reasons.append("existing Gmail draft/thread/sent record already exists")
+    subject_angle = _lead_text_value(lead, SUBJECT_ANGLE_CANDIDATES) or sequence.get("subject_angle", "")
+    if not subject_angle:
+        reasons.append("Subject Angle is missing")
+    clinic_strengths = _lead_text_value(lead, CLINIC_STRENGTHS_CANDIDATES) or sequence.get("clinic_strengths", "")
+    if len([part for part in clinic_strengths.replace("\n", ",").split(",") if part.strip()]) < 4:
+        reasons.append("Clinic Strengths does not have enough real content")
+    if not alias_verified:
+        reasons.append("sender alias is not verified")
+    if not sequence.get("emails", {}).get("email_1", {}).get("subject"):
+        reasons.append("Email 1 subject is missing")
+    if not sequence.get("emails", {}).get("email_1", {}).get("body"):
+        reasons.append("Email 1 body is missing")
+    return not reasons, reasons
+
+
 def _log_skip_details(lead: Dict[str, Any], reason: str) -> None:
     properties = lead.get("properties", {})
-    outreach_status_property = _first_existing_property_name(properties, OUTREACH_STATUS_FIELD_CANDIDATES)
+    outreach_status_property = _first_existing_property_name(properties, STATUS_FIELD_CANDIDATES)
     gmail_draft_id_property = _first_existing_property_name(properties, GMAIL_DRAFT_ID_CANDIDATES)
     outreach_status = _get_text_value(_get_property(lead, outreach_status_property or ""))
     gmail_draft_id_present = bool(_get_text_value(_get_property(lead, gmail_draft_id_property or "")))
@@ -473,15 +695,15 @@ def _log_skip_details(lead: Dict[str, Any], reason: str) -> None:
 
 
 def query_new_leads(limit: int = MAX_DRAFTS_PER_RUN) -> List[Dict[str, Any]]:
-    return _query_draft_candidates(("New Lead",), limit, require_top_issue=True, require_angle_bucket=True)
+    return _query_draft_candidates(("audit_ready", "draft_ready", "New Lead", "Draft Ready"), limit, require_top_issue=True, require_angle_bucket=True)
 
 
 def query_backfill_leads(limit: int = MAX_DRAFTS_PER_RUN) -> List[Dict[str, Any]]:
-    return _query_draft_candidates(("New Lead", "Draft Ready"), limit, require_top_issue=True, require_angle_bucket=True)
+    return _query_draft_candidates(("audit_ready", "draft_ready", "New Lead", "Draft Ready"), limit, require_top_issue=True, require_angle_bucket=True)
 
 
 def query_fallback_leads(limit: int = MAX_DRAFTS_PER_RUN) -> List[Dict[str, Any]]:
-    return _query_draft_candidates(("New Lead", "Draft Ready"), limit, require_top_issue=False, require_angle_bucket=False)
+    return _query_draft_candidates(("audit_ready", "draft_ready", "New Lead", "Draft Ready"), limit, require_top_issue=False, require_angle_bucket=False)
 
 
 def _collect_draft_candidates() -> List[Tuple[str, Dict[str, Any]]]:
@@ -555,7 +777,7 @@ def query_all_leads_for_debug() -> List[Dict[str, Any]]:
 
 def print_no_eligible_lead_debug(schema: Dict[str, Any]) -> None:
     schema_properties = schema.get("properties", {})
-    outreach_status_property = _first_existing_property_name(schema_properties, OUTREACH_STATUS_FIELD_CANDIDATES)
+    outreach_status_property = _first_existing_property_name(schema_properties, STATUS_FIELD_CANDIDATES)
     email_property = _first_existing_property_name(schema_properties, EMAIL_FIELD_CANDIDATES)
     dnc_property = _first_existing_property_name(schema_properties, DO_NOT_CONTACT_CANDIDATES)
 
@@ -589,9 +811,9 @@ def print_no_eligible_lead_debug(schema: Dict[str, Any]) -> None:
         do_not_contact = _get_checkbox_value(_get_property(lead, dnc_property or ""))
 
         reason = ""
-        if outreach_status_value != "New Lead":
+        if outreach_status_value not in {"New Lead", "Draft Ready", "audit_ready", "draft_ready"}:
             counts["status"] += 1
-            reason = f"{outreach_status_property or 'Outreach Status'} was not New Lead"
+            reason = f"{outreach_status_property or 'Outreach Status'} was not draft-ready"
         elif not email_value:
             counts["email"] += 1
             reason = f"{email_property or 'Email'} was missing"
@@ -600,7 +822,7 @@ def print_no_eligible_lead_debug(schema: Dict[str, Any]) -> None:
             reason = "Website was missing"
         elif not top_issue_value:
             counts["top_issue"] += 1
-            reason = "Top Issue was missing"
+            reason = "Top 3 Issues was missing"
         elif not angle_bucket_value:
             counts["angle_bucket"] += 1
             reason = "Angle Bucket was missing"
@@ -615,10 +837,10 @@ def print_no_eligible_lead_debug(schema: Dict[str, Any]) -> None:
 
     print(f"Total leads checked: {len(leads)}")
     print(f"Number eligible: {counts['eligible']}")
-    print(f"Number skipped because Outreach Status is not New Lead: {counts['status']}")
+    print(f"Number skipped because Outreach Status is not draft-ready: {counts['status']}")
     print(f"Number skipped because Email is missing: {counts['email']}")
     print(f"Number skipped because Website is missing: {counts['website']}")
-    print(f"Number skipped because Top Issue is missing: {counts['top_issue']}")
+    print(f"Number skipped because Top 3 Issues is missing: {counts['top_issue']}")
     print(f"Number skipped because Angle Bucket is missing: {counts['angle_bucket']}")
     print(f"Number skipped because Do Not Contact / status is Do Not Contact: {counts['do_not_contact']}")
     print("Skipped leads:")
@@ -628,7 +850,7 @@ def print_no_eligible_lead_debug(schema: Dict[str, Any]) -> None:
 
 def print_validation_warnings(schema: Dict[str, Any]) -> None:
     schema_properties = schema.get("properties", {})
-    outreach_status_property = _first_existing_property_name(schema_properties, OUTREACH_STATUS_FIELD_CANDIDATES)
+    outreach_status_property = _first_existing_property_name(schema_properties, STATUS_FIELD_CANDIDATES)
     email_draft_property = _first_existing_property_name(schema_properties, EMAIL_1_DRAFT_CANDIDATES)
     email_1_date_property = _first_existing_property_name(schema_properties, EMAIL_1_DATE_CANDIDATES)
 
@@ -640,10 +862,10 @@ def print_validation_warnings(schema: Dict[str, Any]) -> None:
         lead_name = _get_lead_name(lead)
         outreach_status = _get_text_value(_get_property(lead, outreach_status_property))
 
-        if outreach_status == "Draft Ready" and email_draft_property:
+        if outreach_status in {"Draft Ready", "draft_ready"} and email_draft_property:
             email_draft = _get_text_value(_get_property(lead, email_draft_property))
             if not email_draft:
-                print(f"Warning: {lead_name} is Draft Ready but Email Draft is empty.")
+                print(f"Warning: {lead_name} is draft-ready but Email Draft is empty.")
 
         if outreach_status == "Email 1 Sent" and email_1_date_property:
             if not _has_date_value(_get_property(lead, email_1_date_property)):
@@ -693,6 +915,9 @@ def build_email_1_sequence_updates(
     sequence: Dict[str, Any],
     draft_id: str = "",
     thread_id: str = "",
+    sent_message_id: str = "",
+    sent_status: str = "",
+    auto_send_eligible: bool = False,
 ) -> Dict[str, Any]:
     properties = schema.get("properties", {})
     updates: Dict[str, Any] = {}
@@ -712,6 +937,17 @@ def build_email_1_sequence_updates(
     _add_update(updates, properties, LOOM_RECOMMENDED_CANDIDATES, sequence["loom_recommended"])
     if sequence["loom_script"]:
         _add_update(updates, properties, LOOM_SCRIPT_CANDIDATES, sequence["loom_script"])
+    _add_update_if_empty(updates, properties, lead, SUBJECT_ANGLE_CANDIDATES, sequence["subject_angle"])
+    _add_update_if_empty(updates, properties, lead, CLINIC_STRENGTHS_CANDIDATES, sequence["clinic_strengths"])
+    _add_update_if_empty(updates, properties, lead, STRONGEST_ADVANTAGE_CANDIDATES, sequence["strongest_advantage"])
+    _add_update_if_empty(updates, properties, lead, PATIENT_TYPE_LOCATION_ANGLE_CANDIDATES, sequence["patient_type_location_angle"])
+    _add_update_if_empty(updates, properties, lead, TOP_3_ISSUES_CANDIDATES, sequence["top_3_issues"])
+    _add_update_if_empty(updates, properties, lead, BUSINESS_IMPACT_CANDIDATES, sequence["business_impact"])
+    _add_update_if_empty(updates, properties, lead, RECOMMENDED_FIX_CANDIDATES, sequence["recommended_fix"])
+    _add_update_if_empty(updates, properties, lead, EMAIL_ANGLE_CANDIDATES, sequence["email_angle"])
+    _add_update_if_empty(updates, properties, lead, LOOM_LINK_CANDIDATES, sequence["loom_link"])
+    _add_update(updates, properties, SEND_MODE_CANDIDATES, settings.send_mode)
+    _add_update(updates, properties, AUTO_SEND_ELIGIBLE_CANDIDATES, auto_send_eligible)
 
     tier_property = _first_existing_property_name(properties, TIER_CANDIDATES)
     top_issue_property = _first_existing_property_name(properties, TOP_ISSUE_CANDIDATES)
@@ -728,7 +964,15 @@ def build_email_1_sequence_updates(
         if thread_id:
             _add_update(updates, properties, GMAIL_THREAD_ID_CANDIDATES, thread_id)
         _add_update(updates, properties, SEQUENCE_STEP_CANDIDATES, "Email 1 Drafted")
-        _add_update(updates, properties, OUTREACH_STATUS_FIELD_CANDIDATES, "Draft Ready")
+        _add_update(updates, properties, OUTREACH_STATUS_FIELD_CANDIDATES, "draft_ready")
+        _add_update(updates, properties, LAST_EMAIL_DRAFTED_AT_CANDIDATES, datetime.now(timezone.utc).date().isoformat())
+
+    if sent_message_id:
+        _add_update(updates, properties, GMAIL_THREAD_ID_CANDIDATES, thread_id or sent_message_id)
+        _add_update(updates, properties, GMAIL_SENT_STATUS_CANDIDATES, sent_status or "Sent")
+        _add_update(updates, properties, SEQUENCE_STEP_CANDIDATES, "Email 1 Sent")
+        _add_update(updates, properties, OUTREACH_STATUS_FIELD_CANDIDATES, "Email 1 Sent")
+        _add_update(updates, properties, LAST_EMAIL_SENT_AT_CANDIDATES, datetime.now(timezone.utc).date().isoformat())
 
     return updates
 
@@ -778,13 +1022,28 @@ def query_due_followups() -> List[Dict[str, Any]]:
     today = datetime.now(timezone.utc).date()
     for lead in leads:
         properties = lead.get("properties", {})
-        outreach_status_property = _first_existing_property_name(properties, OUTREACH_STATUS_FIELD_CANDIDATES)
+        outreach_status_property = _first_existing_property_name(properties, STATUS_FIELD_CANDIDATES)
         reply_status_property = _first_existing_property_name(properties, REPLY_STATUS_CANDIDATES)
         next_followup_property = _first_existing_property_name(properties, NEXT_FOLLOW_UP_DATE_CANDIDATES)
+        follow_up_due_now_property = _first_existing_property_name(properties, FOLLOW_UP_DUE_NOW_CANDIDATES)
         outreach_status = _get_text_value(_get_property(lead, outreach_status_property or ""))
         reply_status = _get_text_value(_get_property(lead, reply_status_property or ""))
         next_followup = _get_date_value(_get_property(lead, next_followup_property or ""))
+        follow_up_due_now = False
+        if follow_up_due_now_property:
+            follow_up_due_now = _is_true_like(_get_formula_value(_get_property(lead, follow_up_due_now_property)))
+
+        if _lead_has_terminal_status(lead):
+            continue
+        if not _lead_is_canada(lead):
+            continue
+        if _lead_duplicate_status(lead) in BLOCKED_DUPLICATE_STATUSES:
+            continue
         if reply_status == "Replied" or outreach_status in {"Replied", "Closed"}:
+            continue
+        if follow_up_due_now_property:
+            if follow_up_due_now:
+                due.append(lead)
             continue
         if outreach_status in {"Email 1 Sent", "Email 2 Sent"} and next_followup and today >= next_followup:
             due.append(lead)
@@ -818,7 +1077,7 @@ def _handle_missing_required_fields(schema: Dict[str, Any], lead: Dict[str, Any]
 def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
     lead_name = _get_lead_name(lead)
     properties = lead.get("properties", {})
-    outreach_status_property = _first_existing_property_name(properties, OUTREACH_STATUS_FIELD_CANDIDATES)
+    outreach_status_property = _first_existing_property_name(properties, STATUS_FIELD_CANDIDATES)
     email_property = _first_existing_property_name(properties, EMAIL_FIELD_CANDIDATES)
     website_property = _first_existing_property_name(properties, WEBSITE_CANDIDATES)
     name_property = _first_existing_property_name(properties, NAME_FIELD_CANDIDATES)
@@ -830,7 +1089,11 @@ def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
     business_name = _get_text_value(_get_property(lead, name_property or ""))
     gmail_draft_id = _get_text_value(_get_property(lead, gmail_draft_id_property or ""))
 
-    if outreach_status not in {"New Lead", "Draft Ready"}:
+    blocked_reasons = _draft_block_reasons(lead, require_unique_duplicate=False, require_gmail_match_no_match=False)
+    if blocked_reasons:
+        _log_skip_details(lead, "; ".join(blocked_reasons))
+        return "skipped_wrong_status"
+    if outreach_status not in {"New Lead", "Draft Ready", "audit_ready", "draft_ready"}:
         _log_skip_details(lead, f"Outreach Status is {outreach_status or '<empty>'}")
         return "skipped_wrong_status"
     if not business_name:
@@ -847,6 +1110,12 @@ def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
         return "skipped_already_drafted"
 
     sequence, _ = process_lead(lead)
+    alias_verified = is_verified_send_as_alias(settings.gmail_send_as_email)
+    if settings.gmail_send_as_email and not alias_verified:
+        print(
+            f"Warning: Gmail send-as alias {settings.gmail_send_as_email} is not verified. "
+            "Draft mode will continue, but auto-send must remain blocked."
+        )
 
     email_1 = sequence["emails"]["email_1"]
 
@@ -864,7 +1133,37 @@ def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
         print("-" * 40)
         return "dry_run_email_1"
 
-    updates = build_email_1_sequence_updates(schema, lead, sequence)
+    auto_send_eligible, auto_send_reasons = _auto_send_is_eligible(lead, sequence, alias_verified)
+    if auto_send_eligible:
+        print(f"Auto-send approved for {lead_name}")
+    else:
+        print(f"Auto-send blocked for {lead_name}: {', '.join(auto_send_reasons)}")
+
+    if settings.send_mode == "auto_send_gated" and settings.auto_send_first_emails and auto_send_eligible:
+        sent = send_email_message(
+            email,
+            email_1["subject"],
+            email_1["body"],
+            from_email=settings.gmail_send_as_email,
+            label_name=settings.gmail_label,
+        )
+        sent_id = sent.get("id", "")
+        thread_id = sent.get("threadId", "")
+        updates = build_email_1_sequence_updates(
+            schema,
+            lead,
+            sequence,
+            thread_id=thread_id,
+            sent_message_id=sent_id,
+            sent_status="Sent",
+            auto_send_eligible=True,
+        )
+        if updates:
+            update_notion_lead(lead["id"], updates)
+        print(f"Sent Email 1 for {lead_name} via verified alias {settings.gmail_send_as_email}")
+        return "email_1_sent"
+
+    updates = build_email_1_sequence_updates(schema, lead, sequence, auto_send_eligible=auto_send_eligible)
     if updates:
         update_notion_lead(lead["id"], updates)
         print(f"Generated sequence for {lead_name}; angle assigned: {sequence['angle_bucket']}")
@@ -877,13 +1176,26 @@ def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
         print(f"Skipped {lead_name}: draft already exists")
         return "duplicate_draft"
 
-    draft = create_draft(email, email_1["subject"], email_1["body"])
+    draft = create_draft(
+        email,
+        email_1["subject"],
+        email_1["body"],
+        from_email=settings.gmail_send_as_email if alias_verified else "",
+        label_name=settings.gmail_label,
+    )
     draft_id, thread_id = _draft_ids_from_gmail_response(draft)
     if not draft_id:
         print(f"Skipped {lead_name}: Gmail did not return a draft id")
         return "skipped"
 
-    updates = build_email_1_sequence_updates(schema, lead, sequence, draft_id=draft_id, thread_id=thread_id)
+    updates = build_email_1_sequence_updates(
+        schema,
+        lead,
+        sequence,
+        draft_id=draft_id,
+        thread_id=thread_id,
+        auto_send_eligible=auto_send_eligible,
+    )
     if updates:
         update_notion_lead(lead["id"], updates)
     print(f"Created Email 1 Gmail draft for {lead_name}")
@@ -893,10 +1205,15 @@ def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
 def _process_due_followup(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
     lead_name = _get_lead_name(lead)
     properties = lead.get("properties", {})
-    outreach_status_property = _first_existing_property_name(properties, OUTREACH_STATUS_FIELD_CANDIDATES)
+    outreach_status_property = _first_existing_property_name(properties, STATUS_FIELD_CANDIDATES)
     outreach_status = _get_text_value(_get_property(lead, outreach_status_property or ""))
     email_property = _first_existing_property_name(properties, EMAIL_FIELD_CANDIDATES)
     email = _get_text_value(_get_property(lead, email_property or ""))
+    alias_verified = is_verified_send_as_alias(settings.gmail_send_as_email)
+    blocked_reasons = _draft_block_reasons(lead, require_unique_duplicate=False, require_gmail_match_no_match=False)
+    if blocked_reasons:
+        print(f"Skipped {lead_name}: {', '.join(blocked_reasons)}")
+        return "skipped"
 
     if outreach_status == "Email 1 Sent":
         target_step = "Email 2 Drafted"
@@ -929,7 +1246,13 @@ def _process_due_followup(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
         print(f"Skipped {lead_name}: Gmail draft creation disabled")
         return "skipped"
 
-    draft = create_draft(email, subject, body)
+    draft = create_draft(
+        email,
+        subject,
+        body,
+        from_email=settings.gmail_send_as_email if alias_verified else "",
+        label_name=settings.gmail_label,
+    )
     draft_id, thread_id = _draft_ids_from_gmail_response(draft)
     if not draft_id:
         print(f"Skipped {lead_name}: Gmail did not return a draft id")
@@ -947,7 +1270,7 @@ def _sync_manual_sent_steps(schema: Dict[str, Any]) -> None:
     today = datetime.now(timezone.utc).date()
     for lead in leads:
         properties = lead.get("properties", {})
-        outreach_status_property = _first_existing_property_name(properties, OUTREACH_STATUS_FIELD_CANDIDATES)
+        outreach_status_property = _first_existing_property_name(properties, STATUS_FIELD_CANDIDATES)
         sequence_step_property = _first_existing_property_name(properties, SEQUENCE_STEP_CANDIDATES)
         last_outreach_property = _first_existing_property_name(properties, LAST_OUTREACH_DATE_CANDIDATES)
         next_followup_property = _first_existing_property_name(properties, NEXT_FOLLOW_UP_DATE_CANDIDATES)
@@ -987,16 +1310,17 @@ def main() -> None:
     args = _parse_args()
     schema = get_data_source_schema()
     properties = schema.get("properties", {})
-    outreach_status_property = _first_existing_property_name(properties, OUTREACH_STATUS_FIELD_CANDIDATES)
+    outreach_status_property = _first_existing_property_name(properties, STATUS_FIELD_CANDIDATES)
     if not outreach_status_property:
         _print_available_properties(properties)
-        raise ValueError("Outreach Status property is missing from the Notion data source.")
+        raise ValueError("Lead Status / Outreach Status property is missing from the Notion data source.")
     print_validation_warnings(schema)
     summary = {
         "records_checked": 0,
         "eligible_records": 0,
         "drafts_attempted": 0,
         "gmail_drafts_created": 0,
+        "gmail_emails_sent": 0,
         "new_leads_used": 0,
         "backfill_used": 0,
         "fallback_used": 0,
@@ -1051,6 +1375,16 @@ def main() -> None:
                             summary["backfill_used"] += 1
                         elif stage_name == STAGE_FALLBACK:
                             summary["fallback_used"] += 1
+                    elif result == "email_1_sent":
+                        summary["eligible_records"] += 1
+                        summary["drafts_attempted"] += 1
+                        summary["gmail_emails_sent"] += 1
+                        if stage_name == STAGE_NEW_LEADS:
+                            summary["new_leads_used"] += 1
+                        elif stage_name == STAGE_BACKFILL:
+                            summary["backfill_used"] += 1
+                        elif stage_name == STAGE_FALLBACK:
+                            summary["fallback_used"] += 1
                     elif result == "skipped_missing_email":
                         summary["skipped_missing_email"] += 1
                     elif result == "skipped_missing_website":
@@ -1065,10 +1399,11 @@ def main() -> None:
                     summary["errors"] += 1
                     print(f"Error processing {_get_lead_name(lead)}: {exc}")
 
-            if summary["gmail_drafts_created"] < MIN_DRAFTS_TARGET:
+            total_outreach_artifacts = summary["gmail_drafts_created"] + summary["gmail_emails_sent"]
+            if total_outreach_artifacts < MIN_DRAFTS_TARGET:
                 if summary["drafts_attempted"] >= MAX_DRAFTS_PER_RUN:
                     summary["shortfall_reason"] = (
-                        f"hard cap reached before soft target: created {summary['gmail_drafts_created']} of "
+                        f"hard cap reached before soft target: created or sent {total_outreach_artifacts} of "
                         f"{MIN_DRAFTS_TARGET}; cap is {MAX_DRAFTS_PER_RUN}"
                     )
                 elif not summary["drafts_attempted"]:
@@ -1077,8 +1412,8 @@ def main() -> None:
                     summary["shortfall_reason"] = "Gmail draft creation is disabled"
                 else:
                     summary["shortfall_reason"] = (
-                        f"eligible candidates were exhausted after stage rotation and dedupe: created "
-                        f"{summary['gmail_drafts_created']} of {MIN_DRAFTS_TARGET}"
+                        f"eligible candidates were exhausted after stage rotation and dedupe: created or sent "
+                        f"{total_outreach_artifacts} of {MIN_DRAFTS_TARGET}"
                     )
 
     if args.mode in {"all", "followups"}:
@@ -1107,6 +1442,7 @@ def main() -> None:
     print(f"- backfill_used: {summary['backfill_used']}")
     print(f"- fallback_used: {summary['fallback_used']}")
     print(f"- total drafts created: {summary['gmail_drafts_created']}")
+    print(f"- total emails sent: {summary['gmail_emails_sent']}")
     if summary["shortfall_reason"]:
         print(f"- shortfall reason: {summary['shortfall_reason']}")
     print(f"- records_checked: {summary['records_checked']}")

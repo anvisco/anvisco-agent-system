@@ -45,7 +45,7 @@ def _fetch(url: str) -> tuple[Optional[str], float, str]:
         response = requests.get(
             url,
             timeout=settings.request_timeout_seconds,
-            headers={"User-Agent": "Mozilla/5.0 AnviscoLeadScraper/1.0"},
+            headers={"User-Agent": "Mozilla/5.0 AnvisLeadScraper/1.0"},
         )
         elapsed = time.monotonic() - start
         response.raise_for_status()
@@ -176,6 +176,12 @@ def _detect_issue_signals(text: str, soup: BeautifulSoup, booking_url: str) -> l
         signals.append("no multilingual support mentioned")
     if "contact" not in lower and not booking_url:
         signals.append("contact path is buried or missing")
+    if not any(keyword in lower for keyword in ("review", "testimonial", "testimonials", "google reviews", "google review")):
+        signals.append("trust signals are thin")
+    if not any(keyword in lower for keyword in ("google maps", "map", "location", "near ", "find us", "directions")):
+        signals.append("local discovery signals are thin")
+    if not any(keyword in lower for keyword in ("faq", "frequently asked", "questions", "schema", "structured data")):
+        signals.append("faq/schema readiness is not obvious")
 
     return signals
 

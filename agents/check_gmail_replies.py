@@ -16,12 +16,14 @@ from src.notion_client import get_database_and_data_source, get_data_source_sche
 
 ACTIVE_SENT_STATUSES = {"Email 1 Sent", "Email 2 Sent"}
 STOP_STATUSES = {"Replied", "Closed", "Call Booked", "Not Interested", "Do Not Contact"}
+TERMINAL_LEAD_STATUSES = {"not_fit"}
 NAME_CANDIDATES = ("Business Name", "Practice Name", "Clinic Name", "Name")
 EMAIL_CANDIDATES = ("Email", "Contact Email")
+LEAD_STATUS_CANDIDATES = ("Lead Status", "Outreach Status")
 OUTREACH_STATUS_CANDIDATES = ("Outreach Status",)
 REPLY_STATUS_CANDIDATES = ("Reply Status",)
 GMAIL_THREAD_ID_CANDIDATES = ("Gmail Thread ID",)
-LAST_OUTREACH_DATE_CANDIDATES = ("Last Outreach Date", "Email 1 Date")
+LAST_OUTREACH_DATE_CANDIDATES = ("Last Email Sent At", "Last Outreach Date", "Email 1 Date")
 SEQUENCE_STEP_CANDIDATES = ("Sequence Step",)
 SCRAPE_NOTES_CANDIDATES = ("Scrape Notes",)
 
@@ -176,8 +178,10 @@ def main() -> None:
             last_outreach_field = _first_existing(properties, LAST_OUTREACH_DATE_CANDIDATES)
 
             outreach_status = _text(properties.get(status_field or "", {}))
+            lead_status_field = _first_existing(properties, LEAD_STATUS_CANDIDATES)
+            lead_status = _text(properties.get(lead_status_field or "", {})).strip().lower()
             reply_status = _text(properties.get(reply_field or "", {}))
-            if outreach_status in STOP_STATUSES or reply_status == "Replied":
+            if lead_status in TERMINAL_LEAD_STATUSES or outreach_status in STOP_STATUSES or reply_status == "Replied":
                 summary["skipped"] += 1
                 continue
             if outreach_status not in ACTIVE_SENT_STATUSES:

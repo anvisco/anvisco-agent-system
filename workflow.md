@@ -1,43 +1,64 @@
-# Anvisco Workflow
+# Anvis Workflow
 
-Last updated: 2026-04-29
+Last updated: 2026-05-05
 
 ## Operating Principle
 
-Notion is the source of truth. Gmail is only used for drafts. Brian reviews and sends manually.
+Notion is the source of truth. Gmail is used for drafts and reply detection. Brian reviews and sends manually unless the gated auto-send mode is explicitly turned on.
 
-Do not build a full admin dashboard yet. Keep the system simple, local, and easy to inspect.
+Keep the system simple, inspectable, and draft-first by default.
 
-## System Roles
+## Operating Modes
 
-The future system can use five specialist agents, but they should work through one orchestrator and shared Notion records.
+### Mode 1: Auto-Draft + Label
 
-1. Lead Gen + Website Audit Agent
-2. UX / Conversion Agent
-3. Copywriting + Email Agent
-4. Sales / Deal Assistant Agent
-5. Client Delivery Agent
-
-The agents do not run independently. Each one updates the same Notion record and passes it to the next step through status changes.
-
-## Daily Lead Workflow
-
-Goal: find and prepare 10-20 quality dental leads per day.
+Default mode.
 
 Flow:
 
-1. Find dental clinics using rotated Toronto-area locations and query variations.
-2. De-duplicate against Notion by website, email, phone, and practice name.
+1. Scrape Canadian leads.
+2. Dedupe against Notion and Gmail records.
+3. Audit the website.
+4. Generate the first outreach email in HTML.
+5. Create a Gmail draft from the verified Anvis sender alias when possible.
+6. Apply the `Anvis/Leads` label.
+7. Brian reviews and sends manually.
+
+### Mode 2: Auto-Send
+
+Gated mode only.
+
+Auto-send is allowed only when all required checks pass, including:
+
+- `AUTO_SEND_FIRST_EMAILS=true`
+- Admin approval is true
+- Country is Canada
+- Duplicate status is Unique
+- Do Not Contact is false
+- CASL Basis is filled
+- Email exists
+- No prior Gmail draft or sent thread exists
+- Subject angle exists
+- Clinic strengths have enough real content
+- Safety validation passes
+- Sender alias is verified
+
+If any of those checks fail, the system falls back to draft mode.
+
+## Daily Lead Workflow
+
+1. Find Canadian dental and local service leads using the active city only.
+2. Dedupe against Notion by website, email, phone, and practice name.
 3. Visit the clinic website.
 4. Extract useful public information.
-5. Audit the website for conversion opportunities.
+5. Audit the website for conversion opportunities, trust signals, local discovery, mobile experience, and booking flow.
 6. Score and tier the lead.
 7. Create or update the Notion lead record.
-8. Generate outreach email draft.
-9. Create Gmail draft.
+8. Generate the outreach email draft.
+9. Create the Gmail draft and label it `Anvis/Leads`.
 10. Set Notion status to Draft Ready.
 
-Never send automatically.
+Never send automatically unless the gated mode is explicitly enabled.
 
 ## Website Audit Workflow
 
@@ -51,38 +72,34 @@ Capture:
 - Doctors / decision makers
 - Services
 - Languages
-- CDCP mention
-- Insurance mention
 - Online booking
 - High-value services
 - Reviews / testimonials
 - Website platform if visible
 - Obvious conversion issue
-- Multilingual opportunity
 
 Look for:
 
-- Broken or expired testimonial widgets
-- Old COVID messaging
-- Old copyright year
-- Missing or weak booking path
-- Too many CTAs
-- Repeated forms
-- Content-heavy sections
-- Confusing service organization
-- Multiple-location confusion
-- High-value services not framed clearly
-- No website translation in a multilingual area
+- Booking flow clarity
+- CTA clarity
+- Mobile experience
+- Trust signals
+- Service structure
+- Local discovery
+- Google, Maps, and AI readiness
+- Speed and performance
+- Content hierarchy
+- FAQ and schema readiness where relevant
 
 ## Lead Scoring
 
 HOT:
 
-- Broken site, no website, severe outdated content, broken trust section, or high-value clinic with obvious conversion issue
+- Broken site, obvious trust failure, outdated content, or high-value clinic with obvious conversion issues
 
 WARM:
 
-- Functional but dated, weak booking flow, poor mobile experience, missing online booking, or strong multilingual opportunity
+- Functional but dated, weak booking flow, poor mobile experience, or missing multilingual support
 
 COOL:
 
@@ -100,27 +117,27 @@ SKIP:
 
 Default subject:
 
-Web design services to improve conversion
+Use a personalized curiosity subject tied to the clinic's strongest missed signal.
 
 Email structure:
 
 Hello [Practice Name],
 
-I build websites that run, grow, and optimize your business.
+I build websites that run, grow, and get discovered.
 
-You can check out some of my work here: https://www.anvisco.com
+You can check out some of my work here: https://anvisco.com
 
 I took a quick look at your website and you already have a solid foundation. [Mention what works.]
 
 One thing I noticed is [specific issue or opportunity]. [Explain why it matters for trust, booking, or patient conversion.]
 
-I also see room to make the website cleaner, faster, easier to navigate, and more conversion-focused. [Mention multilingual translation if relevant.]
+I also see room to make the website cleaner, faster, easier to navigate, and more conversion-focused. [Mention multilingual support if relevant.]
 
-If you’re looking to improve how your website performs, I’d be happy to share how I’d approach it.
+If you are looking to improve how your website performs, I would be happy to share how I would approach it.
 
 Rules:
 
-- No signature
+- No signature unless the approved HTML signature block is already part of the template
 - No em dashes
 - Short and specific
 - Compliment first
@@ -139,33 +156,14 @@ When a lead replies:
 5. Brian reviews and sends manually.
 6. Update Notion status.
 
-Sales stages:
-
-- Replied
-- Interested
-- Call Booked
-- Discovery Completed
-- Proposal Needed
-- Proposal Sent
-- Deposit Pending
-- Closed Won
-- Closed Lost
-- Nurture
-
-Discovery call structure:
-
-1. Understand what they want more of: calls, bookings, consultations, or specific services.
-2. Show the specific website issue and how it affects patients.
-3. Recommend the right package and next step.
-
 ## Client Delivery Workflow
 
 When a deal closes:
 
-1. Move the lead to Client.
+1. Move the lead to client.
 2. Create or update client/project record in Notion.
-3. Track package, deposit, remaining balance, and portal link.
-4. Send onboarding draft through Gmail.
+3. Track package, deposit, remaining balance, and portal access.
+4. Send the onboarding draft through Gmail.
 5. Track assets received.
 6. Move through project stages.
 7. Draft client updates when needed.
@@ -173,33 +171,15 @@ When a deal closes:
 9. Launch and hand over.
 10. Offer Care Plan after launch.
 
-Client project stages:
-
-1. Deposit Pending
-2. Project Confirmed
-3. Onboarding
-4. Build in Progress
-5. Review
-6. Final Payment
-7. Launched
-8. Care Plan Offered
-9. Care Plan Active
-
-## Payment / Package Workflow
+## Payment / Portal Workflow
 
 After package selection:
 
-- Essentials: $600 deposit, $600 remaining
-- Standard: $1,100 deposit, $1,100 remaining
-- Premium: $1,900 deposit, $1,900 remaining
+- Checkout routes to `/checkout`
+- After payment, portal access routes to `/portal`
+- The client must use the same email address used during checkout
 
-Payment methods:
-
-- Stripe
-- E-transfer
-- PayPal on request
-
-The project should not launch until final payment is marked paid.
+Do not use manual payment links.
 
 ## Manual Review Points
 
@@ -208,6 +188,8 @@ Brian should manually review:
 - New lead quality
 - Outreach email before sending
 - Replies before response
+- Follow-ups before sending
 - Package recommendation before proposal
 - Deposit status before project confirmation
 - Final payment before launch
+- Any manual client status change

@@ -19,14 +19,21 @@ CONTACTED_OR_CLOSED = {
     "Not Interested",
     "Do Not Contact",
     "Closed",
+    "not_fit",
 }
-EARLY_STAGE = {"New Lead", "Draft Ready"}
+EARLY_STAGE = {"New Lead", "Draft Ready", "audit_ready", "draft_ready"}
 SOURCE_GOOGLE_PLACES_NEW = "Google Places New"
+LEAD_STATUS_CANDIDATES = ("Lead Status",)
+AUDIT_STATUS_CANDIDATES = ("Audit Status",)
+OUTREACH_STATUS_CANDIDATES = ("Outreach Status",)
+MISSING_SCHEMA_FIELDS_LOGGED: set[str] = set()
 
 
 FIELD_MAP = {
     "Google Place ID": "google_place_id",
     "Business Name": "business_name",
+    "Country": "country",
+    "Province": "province",
     "Niche": "niche",
     "City": "city",
     "Website": "website",
@@ -47,6 +54,27 @@ FIELD_MAP = {
     "Last Scraped Date": None,
     "Scrape Notes": "scrape_notes",
     "Outreach Status": None,
+    "Lead Status": None,
+    "Audit Status": None,
+    "Subject Angle": "subject_angle",
+    "Clinic Strengths": "clinic_strengths",
+    "Strongest Advantage": "strongest_advantage",
+    "Patient Type / Location Angle": "patient_type_location_angle",
+    "Top 3 Issues": "top_3_issues",
+    "Business Impact": "business_impact",
+    "Recommended Fix": "recommended_fix",
+    "Email Angle": "email_angle",
+    "Loom Link": "loom_link",
+    "Send Mode": "send_mode",
+    "Auto-Send Eligible": "auto_send_eligible",
+    "Duplicate Status": "duplicate_status",
+    "Duplicate Reason": "duplicate_reason",
+    "Gmail Match Status": "gmail_match_status",
+    "Gmail Draft ID": "gmail_draft_id",
+    "Gmail Thread ID": "gmail_thread_id",
+    "Gmail Sent Status": "gmail_sent_status",
+    "Admin Approved": "admin_approved",
+    "CASL Basis": "casl_basis",
     "Contact Page URL": "contact_page_url",
     "Booking URL": "booking_url",
     "Languages": "languages",
@@ -91,6 +119,8 @@ def _plain_text(value: Dict[str, Any]) -> str:
         return str(value["number"])
     if value.get("date"):
         return value["date"].get("start", "")
+    if value.get("checkbox") is not None:
+        return "true" if value["checkbox"] else "false"
     return ""
 
 
@@ -115,6 +145,8 @@ def _property_value(prop_type: str, value: Any) -> Optional[Dict[str, Any]]:
         return {"status": {"name": str(value)}}
     if prop_type == "date":
         return {"date": {"start": str(value)}}
+    if prop_type == "checkbox":
+        return {"checkbox": bool(value)}
     return None
 
 
@@ -123,6 +155,21 @@ def _title_property(properties: Dict[str, Any]) -> str:
         if prop.get("type") == "title":
             return name
     raise ValueError("Could not find a Notion title property.")
+
+
+def _first_existing_property_name(properties: Dict[str, Any], candidates: tuple[str, ...]) -> Optional[str]:
+    for candidate in candidates:
+        if candidate in properties:
+            return candidate
+    return None
+
+
+def _log_missing_schema_field(candidates: tuple[str, ...]) -> None:
+    field_name = candidates[0] if candidates else "<unknown>"
+    if field_name in MISSING_SCHEMA_FIELDS_LOGGED:
+        return
+    MISSING_SCHEMA_FIELDS_LOGGED.add(field_name)
+    print(f"Skipping Notion field {field_name}: field not present in schema")
 
 
 def load_existing_leads() -> tuple[list[Dict[str, Any]], Dict[str, Any], str]:
@@ -231,8 +278,14 @@ def should_skip_recent_good_record(page: Dict[str, Any]) -> bool:
         return False
     has_good_data = bool(
         _plain_text(page["properties"].get("Email", {}))
-        and _plain_text(page["properties"].get("Top Issue", {}))
-        and _plain_text(page["properties"].get("Outreach Angle", {}))
+        and (
+            _plain_text(page["properties"].get("Top 3 Issues", {}))
+            or _plain_text(page["properties"].get("Top Issue", {}))
+        )
+        and (
+            _plain_text(page["properties"].get("Email Angle", {}))
+            or _plain_text(page["properties"].get("Outreach Angle", {}))
+        )
     )
     return has_good_data and scraped_date >= date.today() - timedelta(days=30)
 
@@ -242,6 +295,7 @@ def _build_create_properties(audited: AuditedLead, schema_properties: Dict[str, 
     title_property = _title_property(schema_properties)
     for notion_field, attr in FIELD_MAP.items():
         if notion_field not in schema_properties and notion_field != "Business Name":
+            _log_missing_schema_field((notion_field,))
             continue
         value = getattr(audited, attr) if attr else None
         if notion_field == "Business Name":
@@ -257,6 +311,21 @@ def _build_create_properties(audited: AuditedLead, schema_properties: Dict[str, 
         notion_value = _property_value(prop_info["type"], value)
         if notion_value:
             props[property_name] = notion_value
+    lead_status_property = _first_existing_property_name(schema_properties, LEAD_STATUS_CANDIDATES)
+    outreach_status_property = _first_existing_property_name(schema_properties, OUTREACH_STATUS_CANDIDATES)
+    audit_status_property = _first_existing_property_name(schema_properties, AUDIT_STATUS_CANDIDATES)
+    if lead_status_property and lead_status_property not in props:
+        notion_value = _property_value(schema_properties[lead_status_property]["type"], "audit_ready")
+        if notion_value:
+            props[lead_status_property] = notion_value
+    elif outreach_status_property and outreach_status_property not in props:
+        notion_value = _property_value(schema_properties[outreach_status_property]["type"], "New Lead")
+        if notion_value:
+            props[outreach_status_property] = notion_value
+    if audit_status_property and audit_status_property not in props:
+        notion_value = _property_value(schema_properties[audit_status_property]["type"], "complete")
+        if notion_value:
+            props[audit_status_property] = notion_value
     if title_property not in props:
         props[title_property] = _property_value(schema_properties[title_property]["type"], audited.business_name) or {}
     return props
@@ -268,6 +337,7 @@ def _build_update_properties(page: Dict[str, Any], audited: AuditedLead, schema_
     title_property = _title_property(schema_properties)
     for notion_field, attr in FIELD_MAP.items():
         if notion_field not in schema_properties and notion_field != "Business Name":
+            _log_missing_schema_field((notion_field,))
             continue
         if notion_field == "Outreach Status":
             continue
@@ -279,9 +349,9 @@ def _build_update_properties(page: Dict[str, Any], audited: AuditedLead, schema_
             current = _plain_text(existing_props.get(property_name, {}))
             incoming = append_note(current, audited.scrape_notes)
         current = _plain_text(existing_props.get(property_name, {}))
-        if notion_field in {"Top Issue", "Outreach Angle"} and not is_probably_better_text(current, str(incoming or "")):
+        if notion_field in {"Top Issue", "Top 3 Issues", "Outreach Angle", "Email Angle"} and not is_probably_better_text(current, str(incoming or "")):
             continue
-        elif notion_field not in {"Top Issue", "Outreach Angle", "Last Scraped Date", "Scrape Notes"} and current:
+        elif notion_field not in {"Top Issue", "Top 3 Issues", "Outreach Angle", "Email Angle", "Last Scraped Date", "Scrape Notes"} and current:
             continue
         notion_value = _property_value(schema_properties[property_name]["type"], incoming)
         if notion_value:
