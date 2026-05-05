@@ -5,39 +5,34 @@ from typing import Any, Dict
 
 EMAIL_2_SUBJECT = "quick follow-up"
 EMAIL_3_SUBJECT = "should I close this?"
-DEFAULT_WEBSITE = "https://www.anvisco.com"
-SIGNATURE = "Brian Nguyen\nAnvisco\nhttps://www.anvisco.com"
-ANGLE_SUBJECTS = {
-    "No Booking Funnel": "Quick fix for your booking flow",
-    "Too Many CTAs": "Quick thought on your website flow",
-    "Looks Good But Does Not Convert": "Quick idea for your website",
-    "Weak Mobile Experience": "Mobile experience on your site",
-    "Outdated Website": "Quick idea for your website",
-    "No Multilingual Support": "Quick idea for your Toronto audience",
-    "Poor Content Structure": "Your site structure",
-}
-ANGLE_POSITIONING = {
-    "No Booking Funnel": "You are losing patients who will not call.",
-    "Too Many CTAs": "When everything is important, nothing gets clicked.",
-    "Looks Good But Does Not Convert": "The site may look fine, but it is not working like a conversion system.",
-    "Weak Mobile Experience": "Most patients are on mobile, and friction kills bookings.",
-    "Outdated Website": "Patients judge credibility instantly.",
-    "No Multilingual Support": "You may be missing part of your local patient market.",
-    "Poor Content Structure": "People read but do not act.",
-}
-ANGLE_CONVERSION_EXPLANATIONS = {
-    "No Booking Funnel": "When the booking path is not obvious, patients who are ready to act can end up calling later or leaving.",
-    "Too Many CTAs": "When there are too many competing next steps, visitors can hesitate instead of choosing the booking path.",
-    "Looks Good But Does Not Convert": "A site can look solid but still lose bookings if it does not guide visitors toward one clear action.",
-    "Weak Mobile Experience": "Most patients browse on mobile, so small friction in layout or booking can cost real inquiries.",
-    "Outdated Website": "Patients judge trust quickly, so an outdated experience can reduce confidence before they contact you.",
-    "No Multilingual Support": "In a city like Toronto, missing language support can make part of the local audience harder to convert.",
-    "Poor Content Structure": "If services and next steps are hard to scan, people read the page but do not take action.",
-}
+DEFAULT_WEBSITE = "https://anvisco.com"
+SIGNATURE = "Warmly,\nBrian Nguyen\nAnvis | Websites built to run, grow, and get discovered\nGet a free website audit | Book a discovery call"
 FALLBACK_TOP_ISSUE = "the site could use a clearer path from visitor interest to booking"
 FALLBACK_ANGLE_BUCKET = "Looks Good But Does Not Convert"
-FALLBACK_RECOMMENDED_OFFER = "Funnel Optimization"
 HIGH_INTENT_BUCKETS = {"No Booking Funnel", "Too Many CTAs"}
+TREATMENT_KEYWORDS = (
+    "invisalign",
+    "implant",
+    "all-on-four",
+    "all on four",
+    "veneer",
+    "smile makeover",
+    "sedation",
+    "emergency",
+    "root canal",
+    "orthodont",
+    "whitening",
+)
+
+
+def _property_lines(value: str) -> list[str]:
+    lines: list[str] = []
+    for raw_line in value.replace("\r", "\n").split("\n"):
+        for part in raw_line.split(","):
+            cleaned = part.strip().strip("-").strip()
+            if cleaned:
+                lines.append(cleaned)
+    return lines
 
 
 def _extract_text(value: Dict[str, Any]) -> str:
@@ -73,8 +68,17 @@ def _get_first_property_text(lead: Dict[str, Any], property_names: tuple[str, ..
     return ""
 
 
+def _audit_field_text(lead: Dict[str, Any], *property_names: str) -> str:
+    return _get_first_property_text(lead, property_names)
+
+
+def _audit_field_lines(lead: Dict[str, Any], *property_names: str) -> list[str]:
+    text = _audit_field_text(lead, *property_names)
+    return _property_lines(text) if text else []
+
+
 def _get_mentionable_issue(lead: Dict[str, Any]) -> str:
-    for field in ("Top Issue", "Notes", "Outreach Angle"):
+    for field in ("Top Issue", "Top 3 Issues", "Business Impact", "Recommended Fix", "Email Angle", "Notes", "Outreach Angle"):
         text = _get_property_text(lead, field)
         if text:
             return text
@@ -90,9 +94,76 @@ def _derive_outreach_angle(top_issue: str, angle_bucket: str) -> str:
 def _mentions_multilingual_opportunity(lead: Dict[str, Any]) -> bool:
     combined = " ".join(
         _get_property_text(lead, field)
-        for field in ("Top Issue", "Notes", "Outreach Angle", "Languages")
+        for field in ("Top Issue", "Top 3 Issues", "Business Impact", "Recommended Fix", "Email Angle", "Notes", "Outreach Angle", "Languages")
     ).lower()
     return any(keyword in combined for keyword in ("multilingual", "translation", "translate", "language"))
+
+
+def _detect_service_hook(lead: Dict[str, Any]) -> str:
+    services = _property_lines(_get_property_text(lead, "Services"))
+    combined_services = " ".join(services).lower()
+    for keyword in TREATMENT_KEYWORDS:
+        if keyword in combined_services:
+            if "all on four" in keyword:
+                return "All-on-Four"
+            if keyword == "orthodont":
+                return "orthodontics"
+            if keyword == "emergency":
+                return "emergency care"
+            if keyword == "smile makeover":
+                return "smile makeovers"
+            if keyword == "implant":
+                return "implants"
+            return keyword.replace("-", " ").title()
+    return ""
+
+
+def _detect_strength_hook(lead: Dict[str, Any]) -> str:
+    review_count_text = _get_property_text(lead, "Review Count")
+    try:
+        review_count = int(float(review_count_text))
+    except ValueError:
+        review_count = 0
+    service_hook = _detect_service_hook(lead)
+    if service_hook:
+        return service_hook
+    languages = _property_lines(_get_property_text(lead, "Languages"))
+    if len(languages) > 1:
+        return "multilingual advantage"
+    if review_count >= 50:
+        return "review profile"
+    city = _get_first_property_text(lead, ("City", "Location"))
+    if city:
+        return f"{city} visibility"
+    return ""
+
+
+def _build_subject_line(lead: Dict[str, Any], angle_bucket: str) -> str:
+    business_name = _get_first_property_text(lead, ("Business Name", "Practice Name", "Clinic Name", "Name")) or "your clinic"
+    hook = _detect_strength_hook(lead)
+    city = _get_first_property_text(lead, ("City", "Location"))
+
+    if hook == "multilingual advantage":
+        return f"Is {business_name}'s multilingual advantage clear enough?"
+    if hook == "review profile":
+        return f"Is {business_name}'s review story clear enough?"
+    if hook == "All-on-Four":
+        return f"Is {business_name}'s All-on-Four advantage clear enough?"
+    if hook in {"Invisalign", "Implants", "Smile Makeovers", "Emergency Care", "Orthodontics"}:
+        return f"Is {business_name}'s {hook} advantage clear enough?"
+    if hook.endswith("visibility"):
+        return f"Are {city} patients seeing {business_name}'s strongest reasons to book?"
+    if angle_bucket == "No Booking Funnel":
+        return f"Is {business_name} making it easy enough to choose you?"
+    if angle_bucket == "Too Many CTAs":
+        return f"Is {business_name} getting picked, or just compared?"
+    if angle_bucket == "Weak Mobile Experience":
+        return f"Is {business_name} easy to use on mobile?"
+    if angle_bucket == "No Multilingual Support":
+        return f"Is {business_name}'s multilingual advantage clear enough?"
+    if angle_bucket in {"Outdated Website", "Poor Content Structure"}:
+        return f"A visibility gap I noticed for {business_name}"
+    return f"Is {business_name} making it easy enough to choose you?"
 
 
 def map_angle_bucket(lead: Dict[str, Any]) -> str:
@@ -160,30 +231,102 @@ def _loom_script(angle_bucket: str) -> str:
 
 def generate_email_sequence(lead: Dict[str, Any]) -> Dict[str, Any]:
     business_name = _get_first_property_text(lead, ("Business Name", "Practice Name", "Clinic Name", "Name")) or "there"
-    top_issue = _get_mentionable_issue(lead)
     angle_bucket = map_angle_bucket(lead) or FALLBACK_ANGLE_BUCKET
-    outreach_angle = _get_property_text(lead, "Outreach Angle") or _derive_outreach_angle(top_issue, angle_bucket)
-    recommended_offer = _get_property_text(lead, "Recommended Offer") or FALLBACK_RECOMMENDED_OFFER
-    email_1_subject = ANGLE_SUBJECTS.get(angle_bucket, "Quick idea for your website")
+    top_issues = _audit_field_lines(lead, "Top 3 Issues")
+    top_issue = _get_mentionable_issue(lead)
+    business_impact = _audit_field_text(lead, "Business Impact")
+    recommended_fix = _audit_field_text(lead, "Recommended Fix")
+    email_angle = _audit_field_text(lead, "Email Angle")
+    outreach_angle = _get_property_text(lead, "Outreach Angle") or email_angle or _derive_outreach_angle(top_issue, angle_bucket)
+    recommended_offer = _audit_field_text(lead, "Recommended Offer") or "Funnel Optimization"
+    loom_script = _audit_field_text(lead, "Loom Script")
+    email_1_subject = _build_subject_line(lead, angle_bucket)
     loom_recommended = _loom_recommended(lead, angle_bucket)
+    strengths: list[str] = []
+    review_count_text = _get_first_property_text(lead, ("Review Count",))
+    rating_text = _get_first_property_text(lead, ("Rating",))
+    try:
+        review_count = int(float(review_count_text)) if review_count_text else 0
+    except ValueError:
+        review_count = 0
+    if review_count:
+        strengths.append(f"{review_count} Google reviews")
+    if rating_text:
+        strengths.append(f"a {rating_text}-star rating")
+    for service in _property_lines(_get_property_text(lead, "Services"))[:3]:
+        if service:
+            strengths.append(service)
+    for language in _property_lines(_get_property_text(lead, "Languages"))[:2]:
+        if language:
+            strengths.append(language)
+    if _get_property_text(lead, "Contact Page URL"):
+        strengths.append("a clear contact page")
+    if _get_property_text(lead, "Booking URL"):
+        strengths.append("a booking path already in place")
+    if _get_property_text(lead, "Website") or _get_property_text(lead, "Website URL"):
+        strengths.append("a live website")
+    if _get_first_property_text(lead, ("City", "Location")):
+        strengths.append(f"a local presence in {_get_first_property_text(lead, ('City', 'Location'))}")
+    strengths = [strength for strength in strengths if strength]
+    if len(strengths) > 7:
+        strengths = strengths[:7]
+
+    if strengths:
+        if len(strengths) == 1:
+            strengths_sentence = strengths[0]
+        elif len(strengths) == 2:
+            strengths_sentence = f"{strengths[0]} and {strengths[1]}"
+        else:
+            strengths_sentence = ", ".join(strengths[:-1]) + f", and {strengths[-1]}"
+    else:
+        strengths_sentence = "a live website and a visible local footprint"
+
+    gap_sentence = (
+        "The gap I noticed is that those strengths are not structured in a way that is easy to scan or act on."
+    )
+    if business_impact:
+        gap_sentence = business_impact
+    city = _get_first_property_text(lead, ("City", "Location"))
+    search_sentence = ""
+    issue_blob = " ".join([top_issue, business_impact, recommended_fix, email_angle, " ".join(top_issues)]).lower()
+    if city and any(term in issue_blob for term in ("local discovery", "maps", "google", "trust", "schema", "faq")):
+        search_sentence = (
+            f"When someone asks Google, Maps, or AI tools for a dentist in {city}, the clinic with the clearest service structure and trust signals has the advantage."
+        )
+
+    if recommended_fix:
+        lowered_fix = recommended_fix.lower().rstrip(".")
+        if lowered_fix.startswith("tighten "):
+            audit_sentence = f"I would start by {lowered_fix.replace('tighten ', 'tightening ', 1)}."
+        elif lowered_fix.startswith(("run ", "rebuild ", "set up ", "start ")):
+            audit_sentence = f"I would start by {lowered_fix}."
+        else:
+            audit_sentence = f"I would start by tightening {lowered_fix}."
+    elif top_issues:
+        audit_sentence = f"I would start by tightening the main issue around {top_issues[0].lower()}."
+    else:
+        audit_sentence = "I would start by tightening the clearest friction points first."
 
     if angle_bucket in HIGH_INTENT_BUCKETS:
         email_1_body = (
             f"Hi {business_name} team,\n\n"
-            f"I took a quick look at your website and noticed {top_issue}.\n\n"
-            "The main issue is that the site has information, but the booking path does not feel as clear as it could be. "
-            "That usually means some patients leave instead of taking the next step.\n\n"
-            "I build websites that run, grow, and optimize your business. For clinics, I focus on the parts that turn visitors into booked patients: clearer service paths, stronger booking moments, and less friction.\n\n"
-            "If useful, I can show you what I would tighten on your site.\n\n"
+            f"I took a quick look at your website. The clinic has real strengths: {strengths_sentence}. That is a lot to work with.\n\n"
+            f"{gap_sentence}\n\n"
+            f"{search_sentence + ' ' if search_sentence else ''}"
+            "I can send over a free website audit pointing out 3 to 5 things I would immediately improve around visibility, trust, and booking flow.\n\n"
+            f"You can see my work here: {DEFAULT_WEBSITE}\n\n"
+            f"{audit_sentence}\n\n"
             f"{SIGNATURE}"
         )
     else:
         email_1_body = (
             f"Hi {business_name} team,\n\n"
-            f"I took a quick look at your website and noticed {top_issue}.\n\n"
-            "That usually creates friction for patients who are ready to book but do not get a clear next step.\n\n"
-            "I build websites that run, grow, and optimize your business. For clinics, that means turning the site into a cleaner patient conversion flow, not just making it look better.\n\n"
-            "If improving how your site turns visitors into booked patients is something you are considering, I can show you how I would approach it.\n\n"
+            f"I took a quick look at your website. The clinic has real strengths: {strengths_sentence}. That is a lot to work with.\n\n"
+            f"{gap_sentence}\n\n"
+            f"{search_sentence + ' ' if search_sentence else ''}"
+            "I can send over a free website audit pointing out 3 to 5 things I would immediately improve around visibility, trust, and booking flow.\n\n"
+            f"You can see my work here: {DEFAULT_WEBSITE}\n\n"
+            f"{audit_sentence}\n\n"
             f"{SIGNATURE}"
         )
     email_2_body = (
@@ -202,9 +345,13 @@ def generate_email_sequence(lead: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "top_issue": top_issue,
+        "top_3_issues": top_issues,
+        "business_impact": business_impact,
+        "recommended_fix": recommended_fix,
+        "email_angle": email_angle or audit_sentence,
         "angle_bucket": angle_bucket,
         "loom_recommended": loom_recommended,
-        "loom_script": _loom_script(angle_bucket) if loom_recommended else "",
+        "loom_script": loom_script or (_loom_script(angle_bucket) if loom_recommended else ""),
         "recommended_offer": recommended_offer,
         "outreach_angle": outreach_angle,
         "emails": {

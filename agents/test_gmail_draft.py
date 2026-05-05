@@ -13,12 +13,12 @@ from src.gmail_client import build_draft_payload, create_draft
 from src.notion_client import get_data_source_schema, query_database_by_practice_name
 
 
-SUBJECT = "Web design services to improve conversion"
+SUBJECT = "A quick website idea for TEST Dental Clinic"
 BODY = """Hello TEST Dental Clinic,
 
-I build websites that run, grow, and optimize your business.
+I build websites that run, grow, and get discovered.
 
-You can check out some of my work here: https://www.anvisco.com
+You can check out some of my work here: https://anvisco.com
 
 This is a Gmail draft creation test.
 

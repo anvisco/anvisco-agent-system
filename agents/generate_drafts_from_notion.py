@@ -57,7 +57,11 @@ DRAFT_CREATED_DATE_CANDIDATES = ["Draft Created Date"]
 EMAIL_1_DATE_CANDIDATES = ["Email 1 Date"]
 TIER_CANDIDATES = ["Tier"]
 TOP_ISSUE_CANDIDATES = ["Top Issue"]
+TOP_3_ISSUES_CANDIDATES = ["Top 3 Issues"]
+BUSINESS_IMPACT_CANDIDATES = ["Business Impact"]
+RECOMMENDED_FIX_CANDIDATES = ["Recommended Fix"]
 OUTREACH_ANGLE_CANDIDATES = ["Outreach Angle"]
+EMAIL_ANGLE_CANDIDATES = ["Email Angle"]
 WEBSITE_CANDIDATES = ["Website"]
 RECOMMENDED_OFFER_CANDIDATES = ["Recommended Offer"]
 LEAD_QUALITY_SCORE_CANDIDATES = ["Lead Quality Score"]
@@ -345,6 +349,10 @@ def _build_empty_filter(property_name: str, property_type: str) -> Optional[Dict
 def _property_update(property_type: str, value: Any) -> Optional[Dict[str, Any]]:
     if value is None:
         return None
+    if isinstance(value, (list, tuple)):
+        value = "\n".join(f"- {item}" for item in value if str(item).strip())
+        if not value:
+            return None
     if property_type == "rich_text":
         return {"rich_text": [{"type": "text", "text": {"content": str(value)}}]}
     if property_type == "title":
@@ -707,8 +715,12 @@ def build_email_1_sequence_updates(
     _add_update(updates, properties, EMAIL_3_DRAFT_CANDIDATES, emails["email_3"]["body"])
     _add_update(updates, properties, DRAFT_CREATED_DATE_CANDIDATES, datetime.now(timezone.utc).date().isoformat())
     _add_update_if_empty(updates, properties, lead, TOP_ISSUE_CANDIDATES, sequence["top_issue"])
+    _add_update_if_empty(updates, properties, lead, TOP_3_ISSUES_CANDIDATES, sequence.get("top_3_issues", []))
+    _add_update_if_empty(updates, properties, lead, BUSINESS_IMPACT_CANDIDATES, sequence.get("business_impact", ""))
+    _add_update_if_empty(updates, properties, lead, RECOMMENDED_FIX_CANDIDATES, sequence.get("recommended_fix", ""))
     _add_update(updates, properties, ANGLE_BUCKET_CANDIDATES, sequence["angle_bucket"])
     _add_update_if_empty(updates, properties, lead, OUTREACH_ANGLE_CANDIDATES, sequence["outreach_angle"])
+    _add_update_if_empty(updates, properties, lead, EMAIL_ANGLE_CANDIDATES, sequence.get("email_angle", ""))
     _add_update_if_empty(updates, properties, lead, RECOMMENDED_OFFER_CANDIDATES, sequence["recommended_offer"])
     _add_update(updates, properties, LOOM_RECOMMENDED_CANDIDATES, sequence["loom_recommended"])
     if sequence["loom_script"]:
