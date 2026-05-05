@@ -3,8 +3,6 @@ from __future__ import annotations
 from typing import Any, Dict
 
 
-EMAIL_2_SUBJECT = "quick follow-up"
-EMAIL_3_SUBJECT = "should I close this?"
 DEFAULT_WEBSITE = "https://anvisco.com"
 SIGNATURE = "Warmly,\nBrian Nguyen\nAnvis | Websites built to run, grow, and get discovered\nGet a free website audit | Book a discovery call"
 FALLBACK_TOP_ISSUE = "the site could use a clearer path from visitor interest to booking"
@@ -50,6 +48,9 @@ def _extract_text(value: Dict[str, Any]) -> str:
         return value["select"].get("name", "")
     if isinstance(value.get("status"), dict):
         return value["status"].get("name", "")
+    if isinstance(value.get("number"), (int, float)):
+        number = value["number"]
+        return str(int(number)) if float(number).is_integer() else str(number)
     if isinstance(value.get("checkbox"), bool):
         return "true" if value["checkbox"] else "false"
     return ""
@@ -166,6 +167,34 @@ def _build_subject_line(lead: Dict[str, Any], angle_bucket: str) -> str:
     return f"Is {business_name} making it easy enough to choose you?"
 
 
+def _build_followup_subject_line(lead: Dict[str, Any], angle_bucket: str) -> str:
+    business_name = _get_first_property_text(lead, ("Business Name", "Practice Name", "Clinic Name", "Name")) or "your clinic"
+    hook = _detect_strength_hook(lead)
+    city = _get_first_property_text(lead, ("City", "Location"))
+
+    if hook == "multilingual advantage":
+        return f"Follow-up: Is {business_name}'s multilingual advantage clear enough?"
+    if hook == "review profile":
+        return f"Follow-up: Is {business_name}'s review story clear enough?"
+    if hook == "All-on-Four":
+        return f"Follow-up: Is {business_name}'s All-on-Four advantage clear enough?"
+    if hook in {"Invisalign", "Implants", "Smile Makeovers", "Emergency Care", "Orthodontics"}:
+        return f"Follow-up: Is {business_name}'s {hook} advantage clear enough?"
+    if hook.endswith("visibility") and city:
+        return f"Follow-up: Are {city} patients seeing {business_name}'s strongest reasons to book?"
+    if angle_bucket == "No Booking Funnel":
+        return f"Follow-up: Is {business_name} losing ready-to-book patients?"
+    if angle_bucket == "Too Many CTAs":
+        return f"Follow-up: Is {business_name} getting picked, or just compared?"
+    if angle_bucket == "Weak Mobile Experience":
+        return f"Follow-up: Is {business_name} easy to use on mobile?"
+    if angle_bucket == "No Multilingual Support":
+        return f"Follow-up: Is {business_name}'s multilingual advantage clear enough?"
+    if angle_bucket in {"Outdated Website", "Poor Content Structure"}:
+        return f"Follow-up: A visibility gap I noticed for {business_name}"
+    return f"Follow-up: Is {business_name} making it easy enough to choose you?"
+
+
 def map_angle_bucket(lead: Dict[str, Any]) -> str:
     existing_angle = _get_property_text(lead, "Angle Bucket")
     if existing_angle:
@@ -241,6 +270,8 @@ def generate_email_sequence(lead: Dict[str, Any]) -> Dict[str, Any]:
     recommended_offer = _audit_field_text(lead, "Recommended Offer") or "Funnel Optimization"
     loom_script = _audit_field_text(lead, "Loom Script")
     email_1_subject = _build_subject_line(lead, angle_bucket)
+    email_2_subject = _build_followup_subject_line(lead, angle_bucket)
+    email_3_subject = _build_followup_subject_line(lead, angle_bucket)
     loom_recommended = _loom_recommended(lead, angle_bucket)
     strengths: list[str] = []
     review_count_text = _get_first_property_text(lead, ("Review Count",))
@@ -329,19 +360,37 @@ def generate_email_sequence(lead: Dict[str, Any]) -> Dict[str, Any]:
             f"{audit_sentence}\n\n"
             f"{SIGNATURE}"
         )
-    email_2_body = (
-        f"Hello {business_name} team,\n\n"
-        "Wanted to follow up on this.\n\n"
-        f"The angle I noticed was {angle_bucket.lower()}. A lot of dental sites have this issue, so even with traffic, bookings do not come through as consistently as they should.\n\n"
-        "Small structural changes usually make a big difference, especially around how the booking path is presented.\n\n"
-        "Happy to walk you through what I'd change on your site specifically if that's useful."
-    )
-    email_3_body = (
-        f"Hello {business_name} team,\n\n"
-        "Not sure if this is a priority on your end right now.\n\n"
-        f"If improving {angle_bucket.lower()} and turning more website visitors into booked patients is something you're considering, I'm happy to share a few ideas tailored to your clinic.\n\n"
-        "If not, no worries, I'll close this on my end."
-    )
+    use_loom_variant = loom_recommended or bool(loom_script)
+    if use_loom_variant:
+        email_2_body = (
+            f"Hi {business_name} team,\n\n"
+            "Just wanted to follow up on the quick video I sent last week.\n\n"
+            f"The main thing that stood out is that {top_issue.lower() if top_issue else angle_bucket.lower()}. The opportunity is making the path from interest to booking feel clearer.\n\n"
+            f"For patients comparing clinics near {city or 'you'}, that clarity matters. If the call-to-action, navigation, or booking flow takes too much effort to understand, attention can shift to another clinic before they ever call.\n\n"
+            "It also matters for how people search now. Google, Maps, and AI tools are increasingly pulling from structured, clearly written website content when deciding what businesses look most relevant.\n\n"
+            "I can send over a quick free audit with 3 to 5 things I would improve first around visibility, trust, and booking flow.\n\n"
+            f"{SIGNATURE}"
+        )
+        email_3_body = (
+            f"Hi {business_name} team,\n\n"
+            "Circling back in case the quick video got buried.\n\n"
+            f"If improving {angle_bucket.lower()} and making the booking path feel easier is on your radar, I can put together a quick free audit with the first 3 to 5 things I would tighten.\n\n"
+            f"{SIGNATURE}"
+        )
+    else:
+        email_2_body = (
+            f"Hello {business_name} team,\n\n"
+            "Wanted to follow up on this.\n\n"
+            f"The angle I noticed was {angle_bucket.lower()}. A lot of dental sites have this issue, so even with traffic, bookings do not come through as consistently as they should.\n\n"
+            "Small structural changes usually make a big difference, especially around how the booking path is presented.\n\n"
+            "Happy to walk you through what I'd change on your site specifically if that's useful."
+        )
+        email_3_body = (
+            f"Hello {business_name} team,\n\n"
+            "Not sure if this is a priority on your end right now.\n\n"
+            f"If improving {angle_bucket.lower()} and turning more website visitors into booked patients is something you're considering, I'm happy to share a few ideas tailored to your clinic.\n\n"
+            "If not, no worries, I'll close this on my end."
+        )
 
     return {
         "top_issue": top_issue,
@@ -356,8 +405,8 @@ def generate_email_sequence(lead: Dict[str, Any]) -> Dict[str, Any]:
         "outreach_angle": outreach_angle,
         "emails": {
             "email_1": {"subject": email_1_subject, "body": email_1_body},
-            "email_2": {"subject": EMAIL_2_SUBJECT, "body": email_2_body},
-            "email_3": {"subject": EMAIL_3_SUBJECT, "body": email_3_body},
+            "email_2": {"subject": email_2_subject, "body": email_2_body},
+            "email_3": {"subject": email_3_subject, "body": email_3_body},
         },
     }
 
