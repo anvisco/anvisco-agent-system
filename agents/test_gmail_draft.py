@@ -65,8 +65,10 @@ def update_notion_after_draft(draft_id: str) -> None:
     updates: Dict[str, Any] = {}
     if "Gmail Draft ID" in properties:
         updates["Gmail Draft ID"] = {"rich_text": [{"type": "text", "text": {"content": draft_id}}]}
-    if "Outreach Status" in properties:
-        updates["Outreach Status"] = {"select": {"name": "Draft Ready"}}
+    if "Lead Status" in properties:
+        updates["Lead Status"] = {"select": {"name": "draft_ready"}}
+    elif "Outreach Status" in properties:
+        updates["Outreach Status"] = {"select": {"name": "draft_ready"}}
 
     if updates:
         client.pages.update(page_id=page_id, properties=updates)

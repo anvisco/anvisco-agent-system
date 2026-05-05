@@ -48,7 +48,11 @@ settings = Settings(
     gmail_refresh_token=os.getenv("GMAIL_REFRESH_TOKEN", "").strip(),
     gmail_send_as_email=os.getenv("GMAIL_SEND_AS_EMAIL", "brian@anvisco.com").strip(),
     gmail_label=os.getenv("GMAIL_LABEL", "Anvis/Leads").strip(),
-    send_mode=os.getenv("SEND_MODE", "auto_draft").strip().lower(),
+    send_mode=(
+        "auto_send_gated"
+        if os.getenv("SEND_MODE", "auto_draft").strip().lower() == "auto_send"
+        else os.getenv("SEND_MODE", "auto_draft").strip().lower()
+    ),
     auto_send_first_emails=_as_bool(os.getenv("AUTO_SEND_FIRST_EMAILS"), default=False),
     require_admin_approval_for_send=_as_bool(os.getenv("REQUIRE_ADMIN_APPROVAL_FOR_SEND"), default=True),
     dry_run=_as_bool(os.getenv("DRY_RUN"), default=True),

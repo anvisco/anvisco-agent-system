@@ -16,11 +16,13 @@ REQUIRED_FOR_DRAFT = (
     "Business Name",
     "Website",
     "Email",
-    "Top Issue",
-    "Outreach Angle",
+    "Top 3 Issues",
+    "Email Angle",
     "Angle Bucket",
 )
 DUPLICATE_KEYS = ("Domain", "Email", "Phone")
+LEAD_STATUS_CANDIDATES = ("Lead Status", "Outreach Status")
+AUDIT_STATUS_CANDIDATES = ("Audit Status",)
 
 
 def get_client() -> Client:
@@ -51,6 +53,13 @@ def _text(prop: Dict[str, Any]) -> str:
     if prop.get("checkbox") is not None:
         return "true" if prop["checkbox"] else "false"
     return ""
+
+
+def _first_existing(properties: Dict[str, Any], candidates: tuple[str, ...]) -> Optional[str]:
+    for candidate in candidates:
+        if candidate in properties:
+            return candidate
+    return None
 
 
 def _title_property(schema_properties: Dict[str, Any]) -> str:
@@ -122,8 +131,12 @@ def main() -> None:
     valid_new_lead_count = 0
     skipped_count = 0
     for page in pages:
-        status = _text(page.get("properties", {}).get("Outreach Status", {}))
-        if status != "New Lead":
+        properties = page.get("properties", {})
+        lead_status_field = _first_existing(properties, LEAD_STATUS_CANDIDATES)
+        audit_status_field = _first_existing(properties, AUDIT_STATUS_CANDIDATES)
+        lead_status = _text(properties.get(lead_status_field or "", {})).lower()
+        audit_status = _text(properties.get(audit_status_field or "", {})).lower()
+        if lead_status not in {"audit_ready", "draft_ready", "new lead", "draft ready"} and audit_status != "complete":
             continue
         new_lead_count += 1
         name = _field_value(page, "Business Name", title_property) or page["id"]

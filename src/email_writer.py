@@ -119,8 +119,8 @@ CLINIC_STRENGTH_FIELDS = _field_candidates("Clinic Strengths", "Strongest Advant
 STRONGEST_ADVANTAGE_FIELDS = _field_candidates("Strongest Advantage", "Recommended Fix")
 PATIENT_TYPE_LOCATION_FIELDS = _field_candidates("Patient Type / Location Angle", "City", "Niche")
 TOP_3_ISSUES_FIELDS = _field_candidates("Top 3 Issues", "Top Issue")
-BUSINESS_IMPACT_FIELDS = _field_candidates("Business Impact", "Notes", "Top Issue")
-RECOMMENDED_FIX_FIELDS = _field_candidates("Recommended Fix", "Recommended Offer", "Outreach Angle")
+BUSINESS_IMPACT_FIELDS = _field_candidates("Business Impact", "Notes", "Top 3 Issues", "Top Issue")
+RECOMMENDED_FIX_FIELDS = _field_candidates("Recommended Fix", "Recommended Offer", "Email Angle", "Outreach Angle")
 EMAIL_ANGLE_FIELDS = _field_candidates("Email Angle", "Outreach Angle")
 LOOM_LINK_FIELDS = _field_candidates("Loom Link")
 REVIEW_COUNT_FIELDS = _field_candidates("Review Count")
@@ -129,7 +129,7 @@ BOOKING_FIELDS = _field_candidates("Booking URL", "Contact Page URL")
 CITY_FIELDS = _field_candidates("City")
 SERVICE_FIELDS = _field_candidates("Services")
 LANGUAGE_FIELDS = _field_candidates("Languages")
-TOP_ISSUE_FIELDS = _field_candidates("Top Issue")
+TOP_ISSUE_FIELDS = _field_candidates("Top 3 Issues", "Top Issue")
 RECOMMENDED_OFFER_FIELDS = _field_candidates("Recommended Offer")
 COUNTRY_FIELDS = _field_candidates("Country")
 PROVINCE_FIELDS = _field_candidates("Province")
@@ -430,7 +430,7 @@ def _build_followup_body(lead: Dict[str, Any], variant: int = 1) -> str:
 
 
 def _fallback_top_issue(lead: Dict[str, Any]) -> str:
-    for field in ("Top Issue", "Notes", "Outreach Angle"):
+    for field in ("Top 3 Issues", "Top Issue", "Notes", "Email Angle", "Outreach Angle"):
         text = _get_property_text(lead, field)
         if text:
             return text
@@ -451,7 +451,9 @@ def _lead_angle_bucket(lead: Dict[str, Any]) -> str:
     text = " ".join(
         _get_property_text(lead, field)
         for field in (
+            "Top 3 Issues",
             "Top Issue",
+            "Email Angle",
             "Outreach Angle",
             "Recommended Offer",
             "Website Status",
@@ -537,7 +539,7 @@ def generate_email_sequence(lead: Dict[str, Any]) -> Dict[str, Any]:
     business_name = _lead_business_name(lead)
     top_issue = _fallback_top_issue(lead)
     angle_bucket = _lead_angle_bucket(lead) or "Looks Good But Does Not Convert"
-    outreach_angle = _get_property_text(lead, "Outreach Angle") or _derive_outreach_angle(top_issue, angle_bucket)
+    outreach_angle = _get_property_text(lead, "Email Angle") or _get_property_text(lead, "Outreach Angle") or _derive_outreach_angle(top_issue, angle_bucket)
     recommended_offer = _lead_recommended_offer(lead)
     strengths = _clinic_strength_fragments(lead)
     business_impact = _lead_business_impact(lead)

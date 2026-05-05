@@ -21,7 +21,7 @@ EMAIL_CANDIDATES = ("Email", "Contact Email")
 OUTREACH_STATUS_CANDIDATES = ("Outreach Status",)
 REPLY_STATUS_CANDIDATES = ("Reply Status",)
 GMAIL_THREAD_ID_CANDIDATES = ("Gmail Thread ID",)
-LAST_OUTREACH_DATE_CANDIDATES = ("Last Outreach Date", "Email 1 Date")
+LAST_OUTREACH_DATE_CANDIDATES = ("Last Email Sent At", "Last Outreach Date", "Email 1 Date")
 SEQUENCE_STEP_CANDIDATES = ("Sequence Step",)
 SCRAPE_NOTES_CANDIDATES = ("Scrape Notes",)
 
