@@ -180,8 +180,8 @@ def main() -> None:
             outreach_status = _text(properties.get(status_field or "", {}))
             lead_status_field = _first_existing(properties, LEAD_STATUS_CANDIDATES)
             lead_status = _text(properties.get(lead_status_field or "", {})).strip().lower()
-            reply_status = _text(properties.get(reply_field or "", {}))
-            if lead_status in TERMINAL_LEAD_STATUSES or outreach_status in STOP_STATUSES or reply_status == "Replied":
+            reply_status = _text(properties.get(reply_field or "", {})).strip().lower()
+            if lead_status in TERMINAL_LEAD_STATUSES or outreach_status in STOP_STATUSES or reply_status == "replied":
                 summary["skipped"] += 1
                 continue
             if outreach_status not in ACTIVE_SENT_STATUSES:
