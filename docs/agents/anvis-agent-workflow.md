@@ -193,6 +193,7 @@ Admin tools must support viewing, managing, and deleting test clients without af
 
 The workflow should enforce these constraints:
 
+- Brand must stay Anvis in prospect-facing copy, except for the allowed domain and sender email references.
 - Do not send outreach emails automatically.
 - Do not create duplicate drafts for the same lead and sequence step.
 - Do not move a lead into client records without confirmed payment.
@@ -202,6 +203,7 @@ The workflow should enforce these constraints:
 - Do not treat test-client data as production data.
 - Do not invent pricing or package details in automation logic.
 - Do not overwrite manual review fields unless the workflow explicitly allows it.
+- Do not let prospect-facing copy mention stale brand wording, manual payment links, backend tool names, guarantees, or secret-like tokens.
 
 ## Operating State Model
 

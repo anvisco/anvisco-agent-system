@@ -223,3 +223,5 @@ Admin safeguards:
 - Drafts only by default
 - No manual payment links in live prospect copy
 - No bulk campaigns without explicit review
+- Prospect copy must pass safety validation before draft creation
+- Allowed exceptions: `anvisco.com` and `brian@anvisco.com`

@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 from src.config import settings
 from src.gmail_client import build_draft_payload, create_draft
 from src.notion_client import get_data_source_schema, query_database_by_practice_name
+from src.safety import validate_prospect_copy
 
 
 SUBJECT = "A quick website idea for TEST Dental Clinic"
@@ -76,6 +77,8 @@ def main() -> None:
     if not email:
         print("TEST Dental Clinic lead has no email.")
         return
+
+    validate_prospect_copy([SUBJECT, BODY], context="gmail draft test")
 
     payload = build_draft_payload(email, SUBJECT, BODY)
 

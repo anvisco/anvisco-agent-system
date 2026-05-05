@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from src.safety import validate_prospect_copy
 
 DEFAULT_WEBSITE = "https://anvisco.com"
 SIGNATURE = "Warmly,\nBrian Nguyen\nAnvis | Websites built to run, grow, and get discovered\nGet a free website audit | Book a discovery call"
@@ -392,6 +393,25 @@ def generate_email_sequence(lead: Dict[str, Any]) -> Dict[str, Any]:
             "If not, no worries, I'll close this on my end."
         )
 
+    emails = {
+        "email_1": {"subject": email_1_subject, "body": email_1_body},
+        "email_2": {"subject": email_2_subject, "body": email_2_body},
+        "email_3": {"subject": email_3_subject, "body": email_3_body},
+    }
+
+    validate_prospect_copy(
+        [
+            email_1_subject,
+            email_1_body,
+            email_2_subject,
+            email_2_body,
+            email_3_subject,
+            email_3_body,
+            loom_script or "",
+        ],
+        context=f"email sequence for {business_name}",
+    )
+
     return {
         "top_issue": top_issue,
         "top_3_issues": top_issues,
@@ -403,11 +423,7 @@ def generate_email_sequence(lead: Dict[str, Any]) -> Dict[str, Any]:
         "loom_script": loom_script or (_loom_script(angle_bucket) if loom_recommended else ""),
         "recommended_offer": recommended_offer,
         "outreach_angle": outreach_angle,
-        "emails": {
-            "email_1": {"subject": email_1_subject, "body": email_1_body},
-            "email_2": {"subject": email_2_subject, "body": email_2_body},
-            "email_3": {"subject": email_3_subject, "body": email_3_body},
-        },
+        "emails": emails,
     }
 
 
