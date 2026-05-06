@@ -1,0 +1,460 @@
+from __future__ import annotations
+
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+from email.utils import getaddresses, parseaddr
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from notion_client import Client
+
+from agents import generate_drafts_from_notion as draft_flow
+from src.config import settings
+from src.gmail_client import extract_draft_details, get_draft, get_preferred_send_as_email, send_draft
+from src.notion_client import get_data_source_schema, get_database_and_data_source
+from src.safety import validate_prospect_copy
+
+
+SEND_DRY_RUN = os.getenv("SEND_DRY_RUN", "true").strip().lower() in {"1", "true", "yes", "on"}
+SEND_APPROVED_DRAFTS = os.getenv("SEND_APPROVED_DRAFTS", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _max_sends_per_run() -> int:
+    raw_value = os.getenv("MAX_SENDS_PER_RUN", "10")
+    if not raw_value.strip():
+        return 10
+    try:
+        return max(1, int(raw_value))
+    except ValueError:
+        return 10
+
+
+MAX_SENDS_PER_RUN = _max_sends_per_run()
+_VERIFIED_SEND_AS_EMAIL: Optional[str] = None
+
+
+def _verified_send_as_email() -> str:
+    global _VERIFIED_SEND_AS_EMAIL
+    if _VERIFIED_SEND_AS_EMAIL is None:
+        _VERIFIED_SEND_AS_EMAIL = get_preferred_send_as_email(settings.gmail_send_as_email)
+    return _VERIFIED_SEND_AS_EMAIL
+
+
+NAME_FIELD_CANDIDATES = draft_flow.NAME_FIELD_CANDIDATES
+EMAIL_FIELD_CANDIDATES = draft_flow.EMAIL_FIELD_CANDIDATES
+DO_NOT_CONTACT_CANDIDATES = draft_flow.DO_NOT_CONTACT_CANDIDATES
+STATUS_FIELD_CANDIDATES = draft_flow.STATUS_FIELD_CANDIDATES
+DUPLICATE_STATUS_CANDIDATES = draft_flow.DUPLICATE_STATUS_CANDIDATES
+GMAIL_DRAFT_ID_CANDIDATES = draft_flow.GMAIL_DRAFT_ID_CANDIDATES
+GMAIL_THREAD_ID_CANDIDATES = draft_flow.GMAIL_THREAD_ID_CANDIDATES
+GMAIL_MATCH_STATUS_CANDIDATES = draft_flow.GMAIL_MATCH_STATUS_CANDIDATES
+GMAIL_SENT_STATUS_CANDIDATES = draft_flow.GMAIL_SENT_STATUS_CANDIDATES
+ADMIN_APPROVED_CANDIDATES = draft_flow.ADMIN_APPROVED_CANDIDATES
+CASL_BASIS_CANDIDATES = draft_flow.CASL_BASIS_CANDIDATES
+SEND_MODE_CANDIDATES = draft_flow.SEND_MODE_CANDIDATES
+LAST_EMAIL_SENT_AT_CANDIDATES = draft_flow.LAST_EMAIL_SENT_AT_CANDIDATES
+LAST_OUTREACH_DATE_CANDIDATES = draft_flow.LAST_OUTREACH_DATE_CANDIDATES
+NEXT_FOLLOW_UP_DATE_CANDIDATES = draft_flow.NEXT_FOLLOW_UP_DATE_CANDIDATES
+
+BLOCKED_LEAD_STATUSES = {"not_fit", "archived", "paid_client"}
+BLOCKED_DUPLICATE_STATUSES = {"duplicate", "possible_duplicate", "already_contacted", "do_not_contact"}
+BLOCKED_GMAIL_MATCH_STATUSES = {"sent_exists", "replied"}
+BLOCKED_GMAIL_SENT_STATUSES = {"sent"}
+REQUIRED_SEND_MODE = "auto_send_gated"
+REQUIRED_OUTREACH_STATUS = "Email 1 Sent"
+REQUIRED_LEAD_STATUS = "outreach_sent"
+REQUIRED_GMAIL_MATCH_STATUS = "sent_exists"
+REQUIRED_GMAIL_SENT_STATUS = "sent"
+
+
+def get_client() -> Client:
+    if not settings.notion_api_key:
+        raise ValueError("NOTION_API_KEY is missing.")
+    return Client(auth=settings.notion_api_key)
+
+
+def _normalize_text(text: str) -> str:
+    return " ".join(str(text or "").split()).strip().lower()
+
+
+def _first_existing_property_name(properties: Dict[str, Any], candidates: Sequence[str]) -> Optional[str]:
+    for candidate in candidates:
+        if candidate in properties:
+            return candidate
+    return None
+
+
+def _lead_property_text(lead: Dict[str, Any], candidates: Sequence[str]) -> str:
+    return draft_flow._lead_text_value(lead, list(candidates))  # type: ignore[attr-defined]
+
+
+def _lead_checkbox_true(lead: Dict[str, Any], candidates: Sequence[str]) -> bool:
+    return draft_flow._lead_checkbox_true(lead, list(candidates))  # type: ignore[attr-defined]
+
+
+def _lead_name(lead: Dict[str, Any]) -> str:
+    return draft_flow._get_lead_name(lead)  # type: ignore[attr-defined]
+
+
+def _lead_email(lead: Dict[str, Any]) -> str:
+    return _lead_property_text(lead, EMAIL_FIELD_CANDIDATES)
+
+
+def _lead_send_mode(lead: Dict[str, Any]) -> str:
+    return _lead_property_text(lead, SEND_MODE_CANDIDATES)
+
+
+def _lead_status(lead: Dict[str, Any]) -> str:
+    return _normalize_text(_lead_property_text(lead, STATUS_FIELD_CANDIDATES))
+
+
+def _lead_duplicate_status(lead: Dict[str, Any]) -> str:
+    return _normalize_text(_lead_property_text(lead, DUPLICATE_STATUS_CANDIDATES))
+
+
+def _lead_gmail_match_status(lead: Dict[str, Any]) -> str:
+    return _normalize_text(_lead_property_text(lead, GMAIL_MATCH_STATUS_CANDIDATES))
+
+
+def _lead_gmail_sent_status(lead: Dict[str, Any]) -> str:
+    return _normalize_text(_lead_property_text(lead, GMAIL_SENT_STATUS_CANDIDATES))
+
+
+def _lead_gmail_draft_id(lead: Dict[str, Any]) -> str:
+    return _lead_property_text(lead, GMAIL_DRAFT_ID_CANDIDATES)
+
+
+def _lead_thread_id(lead: Dict[str, Any]) -> str:
+    return _lead_property_text(lead, GMAIL_THREAD_ID_CANDIDATES)
+
+
+def _lead_casl_basis(lead: Dict[str, Any]) -> str:
+    return _lead_property_text(lead, CASL_BASIS_CANDIDATES)
+
+
+def _lead_admin_approved(lead: Dict[str, Any]) -> bool:
+    return _lead_checkbox_true(lead, ADMIN_APPROVED_CANDIDATES) or _normalize_text(
+        _lead_property_text(lead, ADMIN_APPROVED_CANDIDATES)
+    ) in {"true", "yes", "approved", "1"}
+
+
+def _lead_country(lead: Dict[str, Any]) -> str:
+    return _normalize_text(draft_flow._lead_text_value(lead, draft_flow.COUNTRY_CANDIDATES))  # type: ignore[attr-defined]
+
+
+def _lead_do_not_contact(lead: Dict[str, Any]) -> bool:
+    return _lead_checkbox_true(lead, DO_NOT_CONTACT_CANDIDATES) or _normalize_text(
+        _lead_property_text(lead, DO_NOT_CONTACT_CANDIDATES)
+    ) in {"true", "yes", "1"}
+
+
+def _lead_send_block_reasons(lead: Dict[str, Any]) -> List[str]:
+    reasons: List[str] = []
+
+    send_mode = _lead_send_mode(lead)
+    if send_mode != REQUIRED_SEND_MODE:
+        reasons.append(f"Send Mode is {send_mode or '<empty>'}")
+
+    if not _lead_admin_approved(lead):
+        reasons.append("Admin Approved is not true")
+
+    if _lead_country(lead) != "canada":
+        country = draft_flow._lead_text_value(lead, draft_flow.COUNTRY_CANDIDATES)  # type: ignore[attr-defined]
+        reasons.append(f"Country is {country or '<empty>'}")
+
+    if _lead_do_not_contact(lead):
+        reasons.append("Do Not Contact is true")
+
+    casl_basis = _lead_casl_basis(lead)
+    if not casl_basis:
+        reasons.append("CASL Basis is missing")
+
+    email = _lead_email(lead)
+    if not email:
+        reasons.append("Email is missing")
+
+    draft_id = _lead_gmail_draft_id(lead)
+    if not draft_id:
+        reasons.append("Gmail Draft ID is missing")
+
+    lead_status = _lead_status(lead)
+    if not lead_status:
+        reasons.append("Lead Status is missing")
+    elif lead_status in BLOCKED_LEAD_STATUSES:
+        reasons.append(f"Lead Status is {lead_status}")
+
+    duplicate_status = _lead_duplicate_status(lead)
+    if duplicate_status in BLOCKED_DUPLICATE_STATUSES:
+        reasons.append(f"Duplicate Status is {duplicate_status}")
+
+    gmail_sent_status = _lead_gmail_sent_status(lead)
+    if gmail_sent_status in BLOCKED_GMAIL_SENT_STATUSES:
+        reasons.append(f"Gmail Sent Status is {gmail_sent_status}")
+
+    gmail_match_status = _lead_gmail_match_status(lead)
+    if gmail_match_status in BLOCKED_GMAIL_MATCH_STATUSES:
+        reasons.append(f"Gmail Match Status is {gmail_match_status}")
+
+    return reasons
+
+
+def _draft_recipient_emails(draft_details: Dict[str, Any]) -> List[str]:
+    return [email.strip().lower() for _, email in getaddresses([draft_details.get("to", "")]) if email.strip()]
+
+
+def _draft_from_email(draft_details: Dict[str, Any]) -> str:
+    return parseaddr(draft_details.get("from", ""))[1].strip().lower()
+
+
+def _draft_send_block_reasons(lead: Dict[str, Any], draft_details: Dict[str, Any]) -> List[str]:
+    reasons: List[str] = []
+    verified_send_as_email = _verified_send_as_email()
+    lead_email = _lead_email(lead).lower()
+    recipient_emails = _draft_recipient_emails(draft_details)
+    if not recipient_emails:
+        reasons.append("draft recipient is missing")
+    elif lead_email not in recipient_emails:
+        reasons.append(f"draft recipient does not match Notion Email ({lead_email or '<empty>'})")
+
+    subject = draft_details.get("subject", "").strip()
+    body = draft_details.get("body", "").strip()
+    if not subject:
+        reasons.append("draft subject is missing")
+    if not body:
+        reasons.append("draft body is missing")
+
+    from_email = _draft_from_email(draft_details)
+    if not verified_send_as_email:
+        reasons.append(f"sender alias {settings.gmail_send_as_email} is not verified")
+    elif from_email and from_email != verified_send_as_email:
+        reasons.append(f"draft From address is {from_email}, expected {verified_send_as_email}")
+
+    try:
+        validate_prospect_copy(subject, body)
+    except Exception as exc:
+        reasons.append(str(exc))
+
+    return reasons
+
+
+def _property_update(property_type: str, value: Any) -> Optional[Dict[str, Any]]:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    if property_type == "rich_text":
+        return {"rich_text": [{"type": "text", "text": {"content": str(value)}}]}
+    if property_type == "title":
+        return {"title": [{"type": "text", "text": {"content": str(value)}}]}
+    if property_type == "select":
+        return {"select": {"name": str(value)}}
+    if property_type == "status":
+        return {"status": {"name": str(value)}}
+    if property_type == "checkbox":
+        return {"checkbox": bool(value)}
+    if property_type == "date":
+        return {"date": {"start": str(value)}}
+    if property_type == "number":
+        return {"number": value}
+    if property_type == "url":
+        return {"url": str(value)}
+    if property_type == "email":
+        return {"email": str(value)}
+    return None
+
+
+def _set_update(
+    updates: Dict[str, Any],
+    schema_properties: Dict[str, Any],
+    candidates: Sequence[str],
+    value: Any,
+    *,
+    only_if_empty: bool = False,
+    lead: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    property_name = _first_existing_property_name(schema_properties, list(candidates))
+    if not property_name:
+        return None
+    if only_if_empty and lead is not None:
+        current_value = draft_flow._get_text_value(draft_flow._get_property(lead, property_name))  # type: ignore[attr-defined]
+        if current_value:
+            return property_name
+    update_value = _property_update(schema_properties[property_name].get("type"), value)
+    if update_value:
+        updates[property_name] = update_value
+    return property_name
+
+
+def _business_days_from(start_date: datetime, days: int) -> str:
+    current = start_date.date()
+    remaining = days
+    while remaining > 0:
+        current += timedelta(days=1)
+        if current.weekday() < 5:
+            remaining -= 1
+    return current.isoformat()
+
+
+def build_notion_send_updates(
+    schema_properties: Dict[str, Any],
+    lead: Dict[str, Any],
+    thread_id: str,
+) -> Dict[str, Any]:
+    updates: Dict[str, Any] = {}
+    now = datetime.now(timezone.utc)
+    sent_date = now.isoformat()
+    follow_up_date = _business_days_from(now, 3)
+
+    _set_update(updates, schema_properties, GMAIL_SENT_STATUS_CANDIDATES, REQUIRED_GMAIL_SENT_STATUS)
+    _set_update(updates, schema_properties, ["Outreach Status"], REQUIRED_OUTREACH_STATUS)
+    _set_update(updates, schema_properties, ["Lead Status"], REQUIRED_LEAD_STATUS)
+    _set_update(updates, schema_properties, LAST_EMAIL_SENT_AT_CANDIDATES, sent_date)
+    _set_update(updates, schema_properties, LAST_OUTREACH_DATE_CANDIDATES, sent_date)
+    if thread_id:
+        _set_update(updates, schema_properties, GMAIL_THREAD_ID_CANDIDATES, thread_id)
+    _set_update(updates, schema_properties, GMAIL_MATCH_STATUS_CANDIDATES, REQUIRED_GMAIL_MATCH_STATUS)
+    _set_update(
+        updates,
+        schema_properties,
+        NEXT_FOLLOW_UP_DATE_CANDIDATES,
+        follow_up_date,
+        only_if_empty=True,
+        lead=lead,
+    )
+    return updates
+
+
+def _load_records() -> List[Dict[str, Any]]:
+    return draft_flow.query_all_leads_for_debug()
+
+
+def _print_global_gate_status() -> None:
+    verified_send_as_email = _verified_send_as_email()
+    if SEND_DRY_RUN:
+        print("Global send gate: dry run mode")
+    else:
+        print("Global send gate: live mode")
+    print(f"- SEND_APPROVED_DRAFTS: {'yes' if SEND_APPROVED_DRAFTS else 'no'}")
+    print(f"- MAX_SENDS_PER_RUN: {MAX_SENDS_PER_RUN}")
+    print(f"- Gmail send-as alias: {settings.gmail_send_as_email}")
+    print(f"- Verified alias: {'yes' if verified_send_as_email else 'no'}")
+    if not SEND_APPROVED_DRAFTS:
+        print("GLOBAL BLOCK | SEND_APPROVED_DRAFTS=false")
+    if not verified_send_as_email:
+        print(f"GLOBAL BLOCK | sender alias {settings.gmail_send_as_email} is not verified")
+    if not SEND_DRY_RUN and not SEND_APPROVED_DRAFTS:
+        print("Live sending is disabled until SEND_APPROVED_DRAFTS=true.")
+
+
+def main() -> None:
+    _, data_source_id = get_database_and_data_source()
+    schema = get_data_source_schema()
+    schema_properties = schema.get("properties", {})
+    records = _load_records()
+
+    _print_global_gate_status()
+    print(f"Loaded Notion records: {len(records)}")
+
+    eligible: List[Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]] = []
+    summary = {
+        "records_checked": 0,
+        "eligible_records": 0,
+        "selected": 0,
+        "would_send": 0,
+        "sent": 0,
+        "notion_updated": 0,
+        "notion_update_failed": 0,
+        "skipped": 0,
+        "errors": 0,
+    }
+    skip_reasons: Dict[str, int] = {}
+
+    for lead in records:
+        summary["records_checked"] += 1
+        lead_name = _lead_name(lead)
+        reasons = _lead_send_block_reasons(lead)
+        draft_id = _lead_gmail_draft_id(lead)
+        if reasons:
+            summary["skipped"] += 1
+            for reason in reasons:
+                skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+            print(
+                f"SKIP | {lead_name} | Gmail Draft ID: {draft_id or '<missing>'} | "
+                f"Reasons: {', '.join(reasons)}"
+            )
+            continue
+
+        try:
+            draft = get_draft(draft_id)
+            draft_details = extract_draft_details(draft)
+            draft_block_reasons = _draft_send_block_reasons(lead, draft_details)
+            if draft_block_reasons:
+                summary["skipped"] += 1
+                for reason in draft_block_reasons:
+                    skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+                print(
+                    f"SKIP | {lead_name} | Gmail Draft ID: {draft_id} | "
+                    f"Reasons: {', '.join(draft_block_reasons)}"
+                )
+                continue
+        except Exception as exc:
+            summary["errors"] += 1
+            print(f"ERROR | {lead_name} | Gmail Draft ID: {draft_id or '<missing>'} | {exc}")
+            continue
+
+        eligible.append((lead, draft, draft_details))
+
+    summary["eligible_records"] = len(eligible)
+    selected = eligible[:MAX_SENDS_PER_RUN]
+    summary["selected"] = len(selected)
+    if SEND_DRY_RUN or not SEND_APPROVED_DRAFTS:
+        summary["would_send"] = len(selected)
+
+    print(f"Eligible records: {len(eligible)}")
+    print(f"Selected records: {len(selected)}")
+
+    for lead, draft, draft_details in selected:
+        lead_name = _lead_name(lead)
+        draft_id = draft_details["draft_id"] or _lead_gmail_draft_id(lead)
+        print(
+            f"WOULD SEND | {lead_name} | draft {draft_id} | to {draft_details.get('to', '<none>')} | "
+            f"subject {draft_details.get('subject', '<no subject>')}"
+        )
+
+    verified_send_as_email = _verified_send_as_email()
+    if SEND_DRY_RUN or not SEND_APPROVED_DRAFTS or not verified_send_as_email:
+        print("No live sends were performed.")
+        print("Send skipped reasons:")
+        for reason, count in sorted(skip_reasons.items(), key=lambda item: (-item[1], item[0])):
+            print(f"- {reason}: {count}")
+        print("Send summary:")
+        for key, value in summary.items():
+            print(f"- {key}: {value}")
+        return
+
+    for lead, draft, draft_details in selected:
+        lead_name = _lead_name(lead)
+        draft_id = draft_details["draft_id"]
+        try:
+            sent = send_draft(draft_id)
+            sent_thread_id = str(sent.get("threadId", "") or sent.get("thread_id", "") or "").strip()
+            print(f"SENT | {lead_name} | draft {draft_id} | thread {sent_thread_id or '<none>'}")
+
+            updates = build_notion_send_updates(schema_properties, lead, sent_thread_id)
+            if updates:
+                get_client().pages.update(page_id=lead["id"], properties=updates)
+                summary["notion_updated"] += 1
+            summary["sent"] += 1
+        except Exception as exc:
+            summary["errors"] += 1
+            print(f"FAIL | send | {lead_name} | draft {draft_id} | {exc}")
+
+    print("Send summary:")
+    for key, value in summary.items():
+        print(f"- {key}: {value}")
+
+
+if __name__ == "__main__":
+    main()

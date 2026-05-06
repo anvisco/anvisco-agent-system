@@ -181,6 +181,28 @@ def get_draft(draft_id: str) -> Dict[str, Any]:
     return get_gmail_service().users().drafts().get(userId="me", id=draft_id, format="full").execute()
 
 
+def extract_draft_details(draft: Dict[str, Any]) -> Dict[str, Any]:
+    message = draft.get("message", {}) or {}
+    payload = message.get("payload", {}) or {}
+    return {
+        "draft_id": str(draft.get("id", "") or "").strip(),
+        "thread_id": str(message.get("threadId", "") or "").strip(),
+        "to": _header_from_payload(payload, "To"),
+        "cc": _header_from_payload(payload, "Cc"),
+        "bcc": _header_from_payload(payload, "Bcc"),
+        "subject": _header_from_payload(payload, "Subject"),
+        "from": _header_from_payload(payload, "From"),
+        "body": _extract_message_text(payload),
+    }
+
+
+def _header_from_payload(payload: Dict[str, Any], name: str) -> str:
+    for header in payload.get("headers", []):
+        if header.get("name", "").lower() == name.lower():
+            return header.get("value", "")
+    return ""
+
+
 def ensure_gmail_label(label_name: str) -> str:
     service = get_gmail_service()
     response = service.users().labels().list(userId="me").execute()
@@ -392,3 +414,8 @@ def send_email_message(to_email: str, subject: str, body: str, from_email: str =
     sent = service.users().messages().send(userId="me", body=payload).execute()
     _label_artifact(sent.get("id", ""), sent.get("threadId", ""), label_name)
     return sent
+
+
+def send_draft(draft_id: str) -> Dict[str, Any]:
+    service = get_gmail_service()
+    return service.users().drafts().send(userId="me", body={"id": draft_id}).execute()
