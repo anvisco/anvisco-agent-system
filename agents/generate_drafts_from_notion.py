@@ -97,6 +97,7 @@ FOLLOW_UP_DUE_NOW_CANDIDATES = ["Follow-Up Due Now"]
 CANADA_COUNTRY = "canada"
 TERMINAL_LEAD_STATUSES = {"not_fit"}
 BLOCKED_DUPLICATE_STATUSES = {"possible_duplicate", "duplicate", "already_contacted", "do_not_contact"}
+FALLBACK_ANGLE_BUCKET = "visibility_trust_booking"
 
 STAGE_NEW_LEADS = "new_leads"
 STAGE_BACKFILL = "backfill"
@@ -876,6 +877,13 @@ def _log_skip_details(lead: Dict[str, Any], reason: str) -> None:
     print(f"- Exact skip reason: {reason}")
 
 
+def _sequence_angle_bucket(sequence: Dict[str, Any]) -> str:
+    angle_bucket = sequence.get("angle_bucket")
+    if isinstance(angle_bucket, str) and angle_bucket.strip():
+        return angle_bucket.strip()
+    return FALLBACK_ANGLE_BUCKET
+
+
 def query_new_leads(limit: int = MAX_DRAFTS_PER_RUN) -> List[Dict[str, Any]]:
     return _query_draft_candidates(limit, require_top_issue=True, require_angle_bucket=True)
 
@@ -1113,7 +1121,7 @@ def build_email_1_sequence_updates(
     _add_update(updates, properties, EMAIL_3_DRAFT_CANDIDATES, emails["email_3"]["body"])
     _add_update(updates, properties, DRAFT_CREATED_DATE_CANDIDATES, datetime.now(timezone.utc).date().isoformat())
     _add_update_if_empty(updates, properties, lead, TOP_ISSUE_CANDIDATES, sequence["top_issue"])
-    _add_update(updates, properties, ANGLE_BUCKET_CANDIDATES, sequence["angle_bucket"])
+    _add_update(updates, properties, ANGLE_BUCKET_CANDIDATES, _sequence_angle_bucket(sequence))
     _add_update_if_empty(updates, properties, lead, OUTREACH_ANGLE_CANDIDATES, sequence["outreach_angle"])
     _add_update_if_empty(updates, properties, lead, RECOMMENDED_OFFER_CANDIDATES, sequence["recommended_offer"])
     _add_update(updates, properties, LOOM_RECOMMENDED_CANDIDATES, sequence["loom_recommended"])
@@ -1303,7 +1311,7 @@ def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
 
     if settings.dry_run:
         print(f"Lead: {lead_name}")
-        print(f"Angle Bucket: {sequence['angle_bucket']}")
+        print(f"Angle Bucket: {_sequence_angle_bucket(sequence)}")
         print(f"To: {email}")
         print(f"Email 1 Subject: {email_1['subject']}")
         print("Email 1 Body:")
@@ -1348,7 +1356,7 @@ def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
     updates = build_email_1_sequence_updates(schema, lead, sequence, auto_send_eligible=auto_send_eligible)
     if updates:
         update_notion_lead(lead["id"], updates)
-        print(f"Generated sequence for {lead_name}; angle assigned: {sequence['angle_bucket']}")
+        print(f"Generated sequence for {lead_name}; angle assigned: {_sequence_angle_bucket(sequence)}")
 
     if not settings.create_gmail_drafts:
         print(f"Saved sequence only for {lead_name}; Gmail draft creation disabled")

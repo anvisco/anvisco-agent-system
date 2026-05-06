@@ -17,6 +17,7 @@ SIGNATURE_HTML = (
 EMAIL_2_SUBJECT = "Follow-up"
 EMAIL_3_SUBJECT = "Follow-up"
 FALLBACK_RECOMMENDED_OFFER = "Website improvements"
+FALLBACK_ANGLE_BUCKET = "visibility_trust_booking"
 
 
 def _extract_text(value: Dict[str, Any]) -> str:
@@ -55,6 +56,14 @@ def _get_first_property_text(lead: Dict[str, Any], property_names: Iterable[str]
         if text:
             return text
     return ""
+
+
+def _get_text_with_fallback(lead: Dict[str, Any], keys: Iterable[str]) -> str:
+    for key in keys:
+        value = lead.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return _get_first_property_text(lead, keys)
 
 
 def _get_number_text(lead: Dict[str, Any], property_names: Iterable[str]) -> str:
@@ -444,12 +453,20 @@ def _derive_outreach_angle(top_issue: str, angle_bucket: str) -> str:
 
 
 def _lead_angle_bucket(lead: Dict[str, Any]) -> str:
-    existing_angle = _get_property_text(lead, "Angle Bucket")
+    existing_angle = _get_text_with_fallback(lead, ("angle_bucket", "Angle Bucket"))
     if existing_angle:
         return existing_angle
 
+    explicit_angle = _get_text_with_fallback(lead, ("email_angle", "Email Angle", "Outreach Angle"))
+    if explicit_angle:
+        return explicit_angle
+
+    explicit_top_issue = _get_text_with_fallback(lead, ("top_issue", "Top Issue"))
+    if explicit_top_issue:
+        return explicit_top_issue
+
     text = " ".join(
-        _get_property_text(lead, field)
+        _get_text_with_fallback(lead, (field,))
         for field in (
             "Top 3 Issues",
             "Top Issue",
@@ -462,7 +479,7 @@ def _lead_angle_bucket(lead: Dict[str, Any]) -> str:
             "Languages",
         )
     ).lower()
-    website_status = _get_property_text(lead, "Website Status").lower()
+    website_status = _get_text_with_fallback(lead, ("Website Status",)).lower()
 
     if any(phrase in text for phrase in ("no booking", "only phone", "only email", "unclear book", "booking funnel", "guided booking")):
         return "No Booking Funnel"
@@ -478,7 +495,7 @@ def _lead_angle_bucket(lead: Dict[str, Any]) -> str:
         return "No Multilingual Support"
     if any(phrase in text for phrase in ("too much text", "weak hierarchy", "hard to scan", "poor service", "content structure")):
         return "Poor Content Structure"
-    return "Looks Good But Does Not Convert"
+    return FALLBACK_ANGLE_BUCKET
 
 
 def _loom_recommended(lead: Dict[str, Any], angle_bucket: str) -> bool:
@@ -538,7 +555,7 @@ def _validate_email_sequence(sequence: Dict[str, Any]) -> None:
 def generate_email_sequence(lead: Dict[str, Any]) -> Dict[str, Any]:
     business_name = _lead_business_name(lead)
     top_issue = _fallback_top_issue(lead)
-    angle_bucket = _lead_angle_bucket(lead) or "Looks Good But Does Not Convert"
+    angle_bucket = _lead_angle_bucket(lead)
     outreach_angle = _get_property_text(lead, "Email Angle") or _get_property_text(lead, "Outreach Angle") or _derive_outreach_angle(top_issue, angle_bucket)
     recommended_offer = _lead_recommended_offer(lead)
     strengths = _clinic_strength_fragments(lead)
@@ -600,6 +617,7 @@ def generate_email_sequence(lead: Dict[str, Any]) -> Dict[str, Any]:
 
     sequence = {
         "top_issue": top_issue,
+        "angle_bucket": angle_bucket,
         "top_3_issues": ", ".join(top_3_issues),
         "business_impact": business_impact,
         "recommended_fix": recommended_fix,
