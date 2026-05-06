@@ -12,7 +12,7 @@ from notion_client.errors import APIResponseError
 
 from src.config import settings
 from src.email_writer import generate_email_sequence
-from src.gmail_client import create_draft, is_verified_send_as_alias, send_email_message
+from src.gmail_client import create_draft, get_preferred_send_as_email, is_verified_send_as_alias, send_email_message
 from src.notion_client import get_data_source_schema, get_database_and_data_source
 
 
@@ -1302,7 +1302,8 @@ def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
         return "skipped_already_drafted"
 
     sequence, _ = process_lead(lead)
-    alias_verified = is_verified_send_as_alias(settings.gmail_send_as_email)
+    verified_from_email = get_preferred_send_as_email(settings.gmail_send_as_email)
+    alias_verified = bool(verified_from_email)
     if settings.gmail_send_as_email and not alias_verified:
         print(
             f"Warning: Gmail send-as alias {settings.gmail_send_as_email} is not verified. "
@@ -1336,7 +1337,7 @@ def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
             email,
             email_1["subject"],
             email_1["body"],
-            from_email=settings.gmail_send_as_email,
+            from_email=verified_from_email,
             label_name=settings.gmail_label,
         )
         sent_id = sent.get("id", "")
@@ -1372,7 +1373,7 @@ def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
         email,
         email_1["subject"],
         email_1["body"],
-        from_email=settings.gmail_send_as_email if alias_verified else "",
+        from_email=verified_from_email,
         label_name=settings.gmail_label,
     )
     draft_id, thread_id = _draft_ids_from_gmail_response(draft)
@@ -1401,7 +1402,8 @@ def _process_due_followup(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
     outreach_status = _get_text_value(_get_property(lead, outreach_status_property or ""))
     email_property = _first_existing_property_name(properties, EMAIL_FIELD_CANDIDATES)
     email = _get_text_value(_get_property(lead, email_property or ""))
-    alias_verified = is_verified_send_as_alias(settings.gmail_send_as_email)
+    verified_from_email = get_preferred_send_as_email(settings.gmail_send_as_email)
+    alias_verified = bool(verified_from_email)
     blocked_reasons = _draft_block_reasons(lead, require_unique_duplicate=False, require_gmail_match_no_match=False)
     if blocked_reasons:
         print(f"Skipped {lead_name}: {', '.join(blocked_reasons)}")
@@ -1442,7 +1444,7 @@ def _process_due_followup(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
         email,
         subject,
         body,
-        from_email=settings.gmail_send_as_email if alias_verified else "",
+        from_email=verified_from_email,
         label_name=settings.gmail_label,
     )
     draft_id, thread_id = _draft_ids_from_gmail_response(draft)

@@ -9,7 +9,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from typing import Any, Dict, Optional
 
 from src.config import settings
-from src.gmail_client import build_draft_payload, create_draft, is_verified_send_as_alias, resolve_verified_send_as_email
+from src.gmail_client import build_draft_payload, create_draft, get_preferred_send_as_email, is_verified_send_as_alias
 from src.notion_client import get_data_source_schema, query_database_by_practice_name
 from src.safety import validate_prospect_copy
 
@@ -86,7 +86,7 @@ def main() -> None:
         return
 
     validate_prospect_copy(SUBJECT, BODY)
-    verified_alias = resolve_verified_send_as_email(settings.gmail_send_as_email)
+    verified_alias = get_preferred_send_as_email(settings.gmail_send_as_email)
     if verified_alias and is_verified_send_as_alias(verified_alias):
         print(f"Verified Gmail send-as alias available: {verified_alias}")
     elif settings.gmail_send_as_email:

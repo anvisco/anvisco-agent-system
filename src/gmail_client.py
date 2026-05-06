@@ -11,6 +11,8 @@ from typing import Any, Dict, Optional
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.exceptions import RefreshError
+from googleapiclient.errors import HttpError
 from googleapiclient.discovery import build
 
 from src.config import settings
@@ -21,6 +23,7 @@ GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.settings.basic",
+    "https://www.googleapis.com/auth/gmail.modify",
 ]
 
 
@@ -52,7 +55,15 @@ def get_gmail_credentials() -> Credentials:
             pass
 
     if creds and creds.refresh_token and (creds.expired or not creds.valid):
-        creds.refresh(Request())
+        try:
+            creds.refresh(Request())
+        except RefreshError as exc:
+            if settings.gmail_token_path and Path(settings.gmail_token_path).exists():
+                raise RuntimeError(
+                    "Gmail token refresh failed because the OAuth scopes are stale or invalid. "
+                    "Delete gmail_token.json and re-authenticate Gmail so the new scopes are granted."
+                ) from exc
+            raise
     elif not creds or not creds.valid:
         if not settings.gmail_credentials_path:
             raise ValueError("GMAIL_CREDENTIALS_PATH is missing.")
@@ -121,7 +132,7 @@ def is_verified_send_as_alias(email: str) -> bool:
     for alias in get_send_as_aliases():
         alias_email = str(alias.get("sendAsEmail", "")).strip().lower()
         status = str(alias.get("verificationStatus", "")).strip().lower()
-        if alias_email == preferred_email and (status in {"accepted", "verified"} or alias.get("isDefault")):
+        if alias_email == preferred_email and status == "accepted":
             return True
     return False
 
@@ -131,6 +142,11 @@ def resolve_verified_send_as_email(preferred_email: str) -> str:
     if preferred_email and is_verified_send_as_alias(preferred_email):
         return preferred_email
     return ""
+
+
+def get_preferred_send_as_email(preferred_email: str = "") -> str:
+    email = preferred_email.strip().lower() if preferred_email else settings.gmail_send_as_email.strip().lower()
+    return resolve_verified_send_as_email(email)
 
 
 def search_messages(query: str, max_results: int = 10) -> list[Dict[str, Any]]:
@@ -181,6 +197,47 @@ def ensure_gmail_label(label_name: str) -> str:
         },
     ).execute()
     return created.get("id", "")
+
+
+def _apply_label_to_draft_message(message_id: str, label_name: str) -> None:
+    if not message_id or not label_name:
+        return
+    label_id = ensure_gmail_label(label_name)
+    if not label_id:
+        print(f"Warning: Gmail label '{label_name}' could not be created or found.")
+        return
+
+    service = get_gmail_service()
+    try:
+        service.users().messages().modify(
+            userId="me",
+            id=message_id,
+            body={"addLabelIds": [label_id]},
+        ).execute()
+        print(f"Applied Gmail label '{label_name}' to draft message {message_id}.")
+    except HttpError as exc:
+        message = str(exc).lower()
+        if "insufficient" in message or "403" in message:
+            print(
+                f"Warning: could not apply Gmail label '{label_name}' to draft message {message_id} "
+                "(insufficient Gmail scope). Re-authenticate Gmail after deleting gmail_token.json."
+            )
+            return
+        print(f"Warning: could not apply Gmail label '{label_name}' to draft message {message_id}: {exc}")
+    except Exception as exc:
+        print(f"Warning: could not apply Gmail label '{label_name}' to draft message {message_id}: {exc}")
+
+
+def _label_created_or_updated_draft(draft_id: str, label_name: str) -> None:
+    if not draft_id or not label_name:
+        return
+    try:
+        fresh_draft = get_draft(draft_id)
+    except Exception as exc:
+        print(f"Warning: could not fetch Gmail draft {draft_id} for label reapply: {exc}")
+        return
+    message_id = fresh_draft.get("message", {}).get("id", "")
+    _apply_label_to_draft_message(message_id, label_name)
 
 
 def _html_to_text(body: str) -> str:
@@ -293,8 +350,8 @@ def create_draft(to_email: str, subject: str, body: str, from_email: str = "", l
     service = get_gmail_service()
     payload = build_draft_payload(to_email, subject, body, from_email=from_email)
     draft = service.users().drafts().create(userId="me", body=payload).execute()
-    draft_message = draft.get("message", {})
-    _label_artifact(draft_message.get("id", ""), draft_message.get("threadId", ""), label_name)
+    if label_name:
+        _label_created_or_updated_draft(draft.get("id", ""), label_name)
     return draft
 
 
@@ -309,6 +366,7 @@ def update_draft(
     in_reply_to: str = "",
     references: str = "",
     thread_id: str = "",
+    label_name: str = "",
 ) -> Dict[str, Any]:
     service = get_gmail_service()
     payload = build_draft_payload(
@@ -323,6 +381,8 @@ def update_draft(
         thread_id=thread_id,
     )
     draft = service.users().drafts().update(userId="me", id=draft_id, body=payload).execute()
+    if label_name:
+        _label_created_or_updated_draft(draft.get("id", ""), label_name)
     return draft
 
 

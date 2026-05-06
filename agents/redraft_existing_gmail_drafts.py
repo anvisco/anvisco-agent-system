@@ -23,7 +23,7 @@ from src.email_writer import (
     _lead_services,
     _short_business_name,
 )
-from src.gmail_client import get_draft, list_drafts, update_draft
+from src.gmail_client import get_draft, get_preferred_send_as_email, list_drafts, update_draft
 from src.safety import validate_prospect_copy
 
 
@@ -566,6 +566,12 @@ def _expand_draft(draft: Dict[str, Any]) -> Dict[str, Any]:
 def main() -> None:
     leads = draft_flow.query_all_leads_for_debug()
     indexes = _build_notion_indexes(leads)
+    verified_from_email = get_preferred_send_as_email(settings.gmail_send_as_email)
+    if settings.gmail_send_as_email and not verified_from_email:
+        print(
+            f"Warning: Gmail send-as alias {settings.gmail_send_as_email} is not verified. "
+            "Drafts will keep using the authenticated account in draft mode, and auto-send must remain blocked."
+        )
 
     gmail_drafts = [_expand_draft(draft) for draft in list_drafts()]
     total_found = len(gmail_drafts)
@@ -649,6 +655,7 @@ def main() -> None:
 
         if REDRAFT_DRY_RUN:
             print("- DRY RUN: would update Gmail draft body and preserve recipients/cc/bcc/thread headers")
+            print(f"- DRY RUN: would reapply Gmail label '{settings.gmail_label}' after draft update")
             id_updates = _existing_notion_id_updates(lead, draft_id, thread_id)
             if id_updates:
                 print(f"- DRY RUN: would update Notion IDs: {', '.join(id_updates.keys())}")
@@ -661,12 +668,13 @@ def main() -> None:
                 to_email=to_header,
                 subject=regenerated["subject"],
                 body=regenerated["body"],
-                from_email=_draft_from_header(draft),
+                from_email=verified_from_email,
                 cc=cc_header,
                 bcc=bcc_header,
                 in_reply_to=in_reply_to,
                 references=references,
                 thread_id=thread_id,
+                label_name=settings.gmail_label,
             )
             summary["updated"] += 1
             print(f"UPDATED | draft {draft_id or '<no id>'} | Gmail draft updated")
