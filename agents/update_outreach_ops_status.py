@@ -67,6 +67,7 @@ CASL_BASIS_CANDIDATES = tuple(draft_flow.CASL_BASIS_CANDIDATES)  # type: ignore[
 DUPLICATE_STATUS_CANDIDATES = tuple(draft_flow.DUPLICATE_STATUS_CANDIDATES)  # type: ignore[attr-defined]
 SEND_MODE_CANDIDATES = tuple(draft_flow.SEND_MODE_CANDIDATES)  # type: ignore[attr-defined]
 EMAIL_CANDIDATES = tuple(draft_flow.EMAIL_FIELD_CANDIDATES)  # type: ignore[attr-defined]
+PHONE_CANDIDATES = ("Phone", "Phone Number", "Business Phone", "Contact Phone", "Mobile Phone", "Cell Phone")
 WEBSITE_CANDIDATES = tuple(draft_flow.WEBSITE_CANDIDATES)  # type: ignore[attr-defined]
 GMAIL_DRAFT_ID_CANDIDATES = tuple(draft_flow.GMAIL_DRAFT_ID_CANDIDATES)  # type: ignore[attr-defined]
 COUNTRY_CANDIDATES = tuple(draft_flow.COUNTRY_CANDIDATES)  # type: ignore[attr-defined]
@@ -85,8 +86,12 @@ REPLIED_STATUS_VALUES = {"replied"}
 CASL_READY_VALUES = {"conspicuously_published_business_email"}
 MANUAL_CASL_VALUES = {"manual_research_needed"}
 SAFE_DUPLICATE_VALUES = {"", "unique"}
-BLOCKED_DUPLICATE_VALUES = {"duplicate", "already_contacted"}
-READY_DUPLICATE_VALUES = {"", "unique", "possible_duplicate"}
+DUPLICATE_REVIEW_REASON = "duplicate_possible"
+DUPLICATE_REVIEW_STATUS = "needs_duplicate_review"
+DUPLICATE_STATUS_REVIEW_VALUES = {"possible_duplicate"}
+DUPLICATE_STATUS_DO_NOT_CONTACT_VALUES = {"do_not_contact"}
+DUPLICATE_STATUS_ACTIVE_BLOCKED_VALUES = {"duplicate", "already_contacted"}
+IGNORED_DUPLICATE_GROUP_STATUSES = {"sent", "replied", "paid_client", "archived", "do_not_contact", "not_fit"}
 
 
 @dataclass
@@ -124,6 +129,8 @@ def _text(prop: Dict[str, Any]) -> str:
         return str(prop["email"]).strip()
     if prop.get("url"):
         return str(prop["url"]).strip()
+    if prop.get("phone_number"):
+        return str(prop["phone_number"]).strip()
     if prop.get("select"):
         return str(prop["select"].get("name", "")).strip()
     if prop.get("status"):
@@ -224,6 +231,10 @@ def _lead_send_mode(lead: Dict[str, Any]) -> str:
 
 def _lead_email(lead: Dict[str, Any]) -> str:
     return _lead_text(lead, EMAIL_CANDIDATES)
+
+
+def _lead_phone(lead: Dict[str, Any]) -> str:
+    return _lead_text(lead, PHONE_CANDIDATES)
 
 
 def _lead_website(lead: Dict[str, Any]) -> str:
@@ -369,7 +380,86 @@ def _blocker_reason_for_draft_health(lead: Dict[str, Any]) -> Optional[str]:
         return "gmail_draft_health_error"
 
 
-def classify_lead(lead: Dict[str, Any], *, allow_rule_based_approval: bool) -> Classification:
+def _normalize_email_key(value: str) -> str:
+    return _normalize(value)
+
+
+def _normalize_phone_key(value: str) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return digits
+
+
+def _duplicate_group_key(lead: Dict[str, Any], field: str) -> Tuple[str, str]:
+    if field == "email":
+        raw_value = _lead_email(lead)
+        return raw_value, _normalize_email_key(raw_value)
+    if field == "phone":
+        raw_value = _lead_phone(lead)
+        return raw_value, _normalize_phone_key(raw_value)
+    return "", ""
+
+
+def _duplicate_group_candidate(lead: Dict[str, Any]) -> bool:
+    if _lead_has_sent(lead) or _lead_has_replied(lead):
+        return False
+    lead_status = _lead_status(lead)
+    if lead_status in IGNORED_DUPLICATE_GROUP_STATUSES or lead_status in {"duplicate", "already_contacted"}:
+        return False
+    if _lead_do_not_contact(lead):
+        return False
+    return True
+
+
+@dataclass
+class DuplicateGroup:
+    field: str
+    normalized_value: str
+    raw_value: str
+    records: List[Dict[str, Any]]
+
+
+def _find_duplicate_groups(records: List[Dict[str, Any]]) -> Tuple[List[DuplicateGroup], set[str]]:
+    grouped: Dict[str, Dict[str, List[Dict[str, Any]]]] = {
+        "email": defaultdict(list),
+        "phone": defaultdict(list),
+    }
+
+    for record in records:
+        if not _duplicate_group_candidate(record):
+            continue
+        for field in ("email", "phone"):
+            raw_value, normalized_value = _duplicate_group_key(record, field)
+            if not raw_value or not normalized_value:
+                continue
+            grouped[field][normalized_value].append(record)
+
+    groups: List[DuplicateGroup] = []
+    member_ids: set[str] = set()
+    for field, buckets in grouped.items():
+        for normalized_value, bucket in buckets.items():
+            if len(bucket) < 2:
+                continue
+            raw_value = _duplicate_group_key(bucket[0], field)[0]
+            groups.append(
+                DuplicateGroup(
+                    field=field,
+                    normalized_value=normalized_value,
+                    raw_value=raw_value,
+                    records=bucket,
+                )
+            )
+            member_ids.update(record["id"] for record in bucket)
+
+    groups.sort(key=lambda group: (group.field, group.normalized_value))
+    return groups, member_ids
+
+
+def classify_lead(
+    lead: Dict[str, Any],
+    *,
+    allow_rule_based_approval: bool,
+    duplicate_group_membership: set[str],
+) -> Classification:
     if _lead_has_replied(lead):
         return Classification("replied", [], "replied")
     if _lead_has_sent(lead):
@@ -387,17 +477,21 @@ def classify_lead(lead: Dict[str, Any], *, allow_rule_based_approval: bool) -> C
     if _lead_country(lead) != CANADA_COUNTRY:
         return Classification("not_fit", ["non_canada"], "non_canada")
 
+    duplicate_status = _lead_duplicate_status(lead)
+    if duplicate_status in DUPLICATE_STATUS_REVIEW_VALUES:
+        return Classification(DUPLICATE_REVIEW_STATUS, [DUPLICATE_REVIEW_REASON], DUPLICATE_REVIEW_REASON)
+    if duplicate_status in DUPLICATE_STATUS_DO_NOT_CONTACT_VALUES:
+        return Classification("do_not_contact", ["do_not_contact"], "do_not_contact")
+    if duplicate_status in DUPLICATE_STATUS_ACTIVE_BLOCKED_VALUES:
+        return Classification("blocked", [f"duplicate_status_{duplicate_status}"], f"duplicate_status_{duplicate_status}")
+    if lead.get("id") in duplicate_group_membership:
+        return Classification(DUPLICATE_REVIEW_STATUS, [DUPLICATE_REVIEW_REASON], DUPLICATE_REVIEW_REASON)
+
     missing_research = _lead_is_missing_required_content(lead)
     if "missing_email" in missing_research:
         return Classification("needs_email_research", missing_research, "missing_email")
     if "missing_website" in missing_research:
         return Classification("needs_website_research", missing_research, "missing_website")
-
-    duplicate_status = _lead_duplicate_status(lead)
-    if duplicate_status == "possible_duplicate":
-        return Classification("needs_duplicate_review", ["duplicate_possible"], "duplicate_possible")
-    if duplicate_status in BLOCKED_DUPLICATE_VALUES:
-        return Classification("blocked", [f"duplicate_status_{duplicate_status}"], f"duplicate_status_{duplicate_status}")
 
     casl_basis = _lead_casl_basis(lead)
     if not casl_basis:
@@ -553,12 +647,29 @@ def _print_examples(examples_by_status: Dict[str, List[str]]) -> None:
         print(f"- {status}: {', '.join(examples)}")
 
 
+def _print_duplicate_groups(groups: List[DuplicateGroup]) -> None:
+    print("Duplicate groups")
+    if not groups:
+        print("- none")
+        return
+
+    for group in groups:
+        examples = []
+        for record in group.records[:3]:
+            examples.append(_lead_name(record))
+        print(
+            f"- {group.field.title()}={group.raw_value or group.normalized_value} | "
+            f"records={len(group.records)} | examples={', '.join(examples)}"
+        )
+
+
 def main() -> None:
     records = _query_all_records()
     schema = get_data_source_schema()
     schema_properties = schema.get("properties", {})
     ops_status_field, ops_status_type = _field_info(schema_properties, OPS_STATUS_CANDIDATES)
     blocker_field, blocker_type = _field_info(schema_properties, BLOCKER_REASON_CANDIDATES)
+    duplicate_groups, duplicate_group_membership = _find_duplicate_groups(records)
 
     print("Outreach Ops Status Classifier")
     print(f"- OPS_STATUS_DRY_RUN: {'yes' if OPS_STATUS_DRY_RUN else 'no'}")
@@ -571,6 +682,8 @@ def main() -> None:
         print("- Warning: Ops Status field is missing; classifier will only preview unless the field exists.")
     if not blocker_field:
         print("- Warning: Blocker Reason field is missing; classifier will only preview blocker codes.")
+    print(f"- duplicate groups found: {len(duplicate_groups)}")
+    _print_duplicate_groups(duplicate_groups)
 
     status_counts: Counter[str] = Counter()
     blocker_counts: Counter[str] = Counter()
@@ -580,7 +693,11 @@ def main() -> None:
     blocked_for_schema = 0
 
     for record in records:
-        classification = classify_lead(record, allow_rule_based_approval=ALLOW_RULE_BASED_APPROVAL)
+        classification = classify_lead(
+            record,
+            allow_rule_based_approval=ALLOW_RULE_BASED_APPROVAL,
+            duplicate_group_membership=duplicate_group_membership,
+        )
         status_counts[classification.status] += 1
         if classification.blockers:
             for blocker in classification.blockers:

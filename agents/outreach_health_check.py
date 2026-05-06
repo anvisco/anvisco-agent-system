@@ -45,6 +45,7 @@ CANONICAL_CASL_BASIS_CANDIDATES = ("CASL Basis",)
 CANONICAL_DUPLICATE_STATUS_CANDIDATES = ("Duplicate Status",)
 CANONICAL_SEND_MODE_CANDIDATES = ("Send Mode",)
 CANONICAL_EMAIL_CANDIDATES = ("Email", "Contact Email")
+NAME_CANDIDATES = ("Business Name", "Practice Name", "Clinic Name", "Name")
 CANONICAL_WEBSITE_CANDIDATES = ("Website",)
 CANONICAL_GMAIL_DRAFT_ID_CANDIDATES = ("Gmail Draft ID",)
 CANONICAL_COUNTRY_CANDIDATES = ("Country",)
@@ -61,6 +62,7 @@ CANONICAL_DRAFT_READY_STATUSES = {"audit_ready", "draft_ready", "outreach_drafte
 CANONICAL_REPLIED_STATUSES = {"replied"}
 CANONICAL_BLOCKED_LEAD_STATUSES = {"not_fit", "archived", "paid_client"}
 CANONICAL_BLOCKED_DUPLICATE_STATUSES = {"duplicate", "possible_duplicate", "already_contacted", "do_not_contact"}
+OPS_READY_TO_DRAFT_STATUS = "ready_to_draft"
 CASL_READY_VALUES = {
     "conspicuously_published_business_email",
     "existing_business_relationship",
@@ -210,6 +212,11 @@ def _lead_ops_status(lead: Dict[str, Any]) -> str:
     return _normalize(_lead_text(lead, OPS_STATUS_CANDIDATES))
 
 
+def _lead_name(lead: Dict[str, Any]) -> str:
+    name = _lead_text(lead, NAME_CANDIDATES)
+    return name or lead.get("id", "<unknown>")
+
+
 def _lead_blocker_reasons(lead: Dict[str, Any]) -> List[str]:
     properties = lead.get("properties", {})
     property_name = _first_existing(properties, BLOCKER_REASON_CANDIDATES)
@@ -276,6 +283,28 @@ def _draft_ready_reason(lead: Dict[str, Any]) -> Optional[str]:
         return "Gmail Draft ID already exists"
 
     return None
+
+
+def _legacy_draft_ready_mismatch_reason(lead: Dict[str, Any], *, ops_status_exists: bool) -> Optional[str]:
+    if _replied(lead):
+        return "replied"
+    lead_status = _lead_status(lead)
+    if lead_status == "sent":
+        return "sent"
+    if lead_status == "not_fit":
+        return "not_fit"
+    if lead_status in {"archived", "paid_client"}:
+        return lead_status
+
+    if _lead_checkbox(lead, CANONICAL_DNC_CANDIDATES):
+        return "do_not_contact"
+    if _lead_gmail_sent_status(lead) == "sent":
+        return "gmail_sent_status_sent"
+    if _lead_gmail_match_status(lead) in {"sent_exists", "replied"}:
+        return f"gmail_match_status_{_lead_gmail_match_status(lead)}"
+    if ops_status_exists and _lead_ops_status(lead) != OPS_READY_TO_DRAFT_STATUS:
+        return f"ops_status_{_lead_ops_status(lead) or '<empty>'}"
+    return _draft_ready_reason(lead)
 
 
 def _casl_ready(lead: Dict[str, Any]) -> bool:
@@ -729,7 +758,10 @@ def main() -> None:
     ops_status_counts = _count_by_field(leads, _lead_ops_status)
     blocker_reason_counts = _count_blocker_reasons(leads)
 
-    draft_ready_count = 0
+    ops_ready_to_draft_count = 0
+    legacy_raw_draft_ready_count = 0
+    legacy_draft_ready_diagnostic_count = 0
+    legacy_mismatch_examples: List[Tuple[str, str]] = []
     casl_ready_count = 0
     manual_casl_review_count = 0
     send_ready_count = 0
@@ -742,8 +774,15 @@ def main() -> None:
     draft_state_counts = _draft_state_counts(leads)
 
     for lead in leads:
+        if _lead_ops_status(lead) == OPS_READY_TO_DRAFT_STATUS:
+            ops_ready_to_draft_count += 1
         if _draft_ready_reason(lead) is None:
-            draft_ready_count += 1
+            legacy_raw_draft_ready_count += 1
+        mismatch_reason = _legacy_draft_ready_mismatch_reason(lead, ops_status_exists=ops_status_exists)
+        if mismatch_reason is None:
+            legacy_draft_ready_diagnostic_count += 1
+        elif _draft_ready_reason(lead) is None and len(legacy_mismatch_examples) < 5:
+            legacy_mismatch_examples.append((_lead_name(lead), mismatch_reason))
 
         if _casl_ready(lead):
             casl_ready_count += 1
@@ -771,7 +810,7 @@ def main() -> None:
     draft_exists_drafted_count = draft_state_counts["draft_exists_drafted"]
     current_pool_exhausted = (
         send_ready_count == 0
-        and draft_ready_count == 0
+        and ops_ready_to_draft_count == 0
         and stale_non_active_unsent_count == 0
         and follow_up_due_count == 0
         and manual_casl_review_count == 0
@@ -795,7 +834,7 @@ def main() -> None:
         ops_queue_counts=ops_queue_counts,
         send_ready=send_ready_count,
         stale_non_active_unsent=stale_non_active_unsent_count,
-        draft_ready=draft_ready_count,
+        draft_ready=ops_ready_to_draft_count if ops_status_exists else legacy_draft_ready_diagnostic_count,
         casl_backfill_needed=manual_casl_review_count,
         followup_due=follow_up_due_count,
         draft_exists_drafted=draft_exists_drafted_count,
@@ -835,7 +874,24 @@ def main() -> None:
     print("6c. Records by Blocker Reason")
     _print_counter("Blocker Reason counts:", blocker_reason_counts)
     print("7. Draft ready count")
-    print(f"- {draft_ready_count}")
+    if ops_status_exists:
+        print(f"- {ops_ready_to_draft_count} (Ops Status = ready_to_draft)")
+    else:
+        print(f"- {legacy_draft_ready_diagnostic_count} (legacy draft-ready diagnostic)")
+    print("7b. Ops vs legacy diagnostic")
+    print(f"- Ops ready_to_draft: {ops_ready_to_draft_count}")
+    print(f"- Legacy draft-ready diagnostic: {legacy_draft_ready_diagnostic_count}")
+    if ops_status_exists:
+        print(f"- Difference: {legacy_raw_draft_ready_count - ops_ready_to_draft_count}")
+    else:
+        print("- Difference: n/a (Ops Status missing)")
+    print("Example records causing mismatch")
+    if legacy_mismatch_examples:
+        for name, reason in legacy_mismatch_examples:
+            print(f"- {name}: {reason}")
+    else:
+        print("- none")
+    print(f"- raw legacy heuristic (debug only): {legacy_raw_draft_ready_count}")
     print("8. CASL ready count")
     print(f"- {casl_ready_count}")
     print("9. Send ready count")
