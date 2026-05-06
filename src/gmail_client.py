@@ -139,8 +139,30 @@ def search_messages(query: str, max_results: int = 10) -> list[Dict[str, Any]]:
     return list(response.get("messages", []))
 
 
+def list_drafts(max_results: int = 100) -> list[Dict[str, Any]]:
+    service = get_gmail_service()
+    drafts: list[Dict[str, Any]] = []
+    page_token: Optional[str] = None
+
+    while True:
+        request = service.users().drafts().list(userId="me", maxResults=max_results)
+        if page_token:
+            request = request.pageToken(page_token)
+        response = request.execute()
+        drafts.extend(response.get("drafts", []))
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+
+    return drafts
+
+
 def get_thread(thread_id: str) -> Dict[str, Any]:
     return get_gmail_service().users().threads().get(userId="me", id=thread_id, format="metadata").execute()
+
+
+def get_draft(draft_id: str) -> Dict[str, Any]:
+    return get_gmail_service().users().drafts().get(userId="me", id=draft_id, format="full").execute()
 
 
 def ensure_gmail_label(label_name: str) -> str:
@@ -175,12 +197,24 @@ def _build_email_message(
     subject: str,
     body: str,
     from_email: str = "",
+    cc: str = "",
+    bcc: str = "",
+    in_reply_to: str = "",
+    references: str = "",
 ) -> EmailMessage:
     message = EmailMessage()
     message["To"] = to_email
     message["Subject"] = subject
     if from_email:
         message["From"] = formataddr(("Brian Nguyen", from_email))
+    if cc:
+        message["Cc"] = cc
+    if bcc:
+        message["Bcc"] = bcc
+    if in_reply_to:
+        message["In-Reply-To"] = in_reply_to
+    if references:
+        message["References"] = references
     message.set_content(_html_to_text(body))
     message.add_alternative(body, subtype="html")
     return message
@@ -192,10 +226,32 @@ def _raw_message(message: EmailMessage) -> str:
     return raw
 
 
-def build_draft_payload(to_email: str, subject: str, body: str, from_email: str = "") -> Dict[str, Any]:
-    message = _build_email_message(to_email, subject, body, from_email=from_email)
+def build_draft_payload(
+    to_email: str,
+    subject: str,
+    body: str,
+    from_email: str = "",
+    cc: str = "",
+    bcc: str = "",
+    in_reply_to: str = "",
+    references: str = "",
+    thread_id: str = "",
+) -> Dict[str, Any]:
+    message = _build_email_message(
+        to_email,
+        subject,
+        body,
+        from_email=from_email,
+        cc=cc,
+        bcc=bcc,
+        in_reply_to=in_reply_to,
+        references=references,
+    )
     raw = _raw_message(message)
-    return {"message": {"raw": raw}}
+    payload: Dict[str, Any] = {"message": {"raw": raw}}
+    if thread_id:
+        payload["message"]["threadId"] = thread_id
+    return payload
 
 
 def build_send_payload(to_email: str, subject: str, body: str, from_email: str = "") -> Dict[str, Any]:
@@ -239,6 +295,34 @@ def create_draft(to_email: str, subject: str, body: str, from_email: str = "", l
     draft = service.users().drafts().create(userId="me", body=payload).execute()
     draft_message = draft.get("message", {})
     _label_artifact(draft_message.get("id", ""), draft_message.get("threadId", ""), label_name)
+    return draft
+
+
+def update_draft(
+    draft_id: str,
+    to_email: str,
+    subject: str,
+    body: str,
+    from_email: str = "",
+    cc: str = "",
+    bcc: str = "",
+    in_reply_to: str = "",
+    references: str = "",
+    thread_id: str = "",
+) -> Dict[str, Any]:
+    service = get_gmail_service()
+    payload = build_draft_payload(
+        to_email,
+        subject,
+        body,
+        from_email=from_email,
+        cc=cc,
+        bcc=bcc,
+        in_reply_to=in_reply_to,
+        references=references,
+        thread_id=thread_id,
+    )
+    draft = service.users().drafts().update(userId="me", id=draft_id, body=payload).execute()
     return draft
 
 
