@@ -23,7 +23,7 @@ from lead_scraper.src.lead_finder import (
 )
 from src.config import settings
 from src.gmail_client import extract_draft_details, get_draft, is_stale_gmail_thread_error
-from src.notion_client import get_database_and_data_source
+from src.notion_client import get_data_source_schema, get_database_and_data_source
 
 
 CHECK_GMAIL_DRAFT_HEALTH = os.getenv("CHECK_GMAIL_DRAFT_HEALTH", "false").strip().lower() in {
@@ -52,6 +52,8 @@ CANONICAL_COUNTRY_CANDIDATES = ("Country",)
 CANONICAL_DNC_CANDIDATES = ("Do Not Contact", "DNC")
 CANONICAL_NEXT_FOLLOW_UP_CANDIDATES = ("Next Follow-up Date", "Next Follow Up Date")
 CANONICAL_FOLLOW_UP_DUE_NOW_CANDIDATES = ("Follow-Up Due Now",)
+OPS_STATUS_CANDIDATES = ("Ops Status",)
+BLOCKER_REASON_CANDIDATES = ("Blocker Reason",)
 
 CANADA_COUNTRY = "canada"
 READY_TO_SEND_MODE = "auto_send_gated"
@@ -202,6 +204,35 @@ def _lead_follow_up_due_now(lead: Dict[str, Any]) -> bool:
     if formula.get("type") == "boolean":
         return bool(formula.get("boolean"))
     return False
+
+
+def _lead_ops_status(lead: Dict[str, Any]) -> str:
+    return _normalize(_lead_text(lead, OPS_STATUS_CANDIDATES))
+
+
+def _lead_blocker_reasons(lead: Dict[str, Any]) -> List[str]:
+    properties = lead.get("properties", {})
+    property_name = _first_existing(properties, BLOCKER_REASON_CANDIDATES)
+    if not property_name:
+        return []
+
+    prop = properties.get(property_name, {})
+    values: List[str] = []
+    if prop.get("multi_select"):
+        values.extend(
+            str(item.get("name", "")).strip()
+            for item in prop["multi_select"]
+            if str(item.get("name", "")).strip()
+        )
+    elif prop.get("rich_text"):
+        raw = _text(prop)
+        if raw:
+            values.extend(part.strip() for part in raw.replace(";", ",").split(",") if part.strip())
+    else:
+        raw = _text(prop)
+        if raw:
+            values.extend(part.strip() for part in raw.replace(";", ",").split(",") if part.strip())
+    return [_normalize(value) for value in values if _normalize(value)]
 
 
 def _outreach_status_value(lead: Dict[str, Any]) -> str:
@@ -528,9 +559,23 @@ def _count_by_field(leads: List[Dict[str, Any]], field_getter) -> Counter[str]:
     return counts
 
 
+def _count_blocker_reasons(leads: List[Dict[str, Any]]) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    for lead in leads:
+        reasons = _lead_blocker_reasons(lead)
+        if not reasons:
+            counts["<empty>"] += 1
+            continue
+        for reason in reasons:
+            counts[reason] += 1
+    return counts
+
+
 def _recommended_next_step(
     *,
     active_city: str,
+    use_ops_status: bool,
+    ops_queue_counts: Dict[str, int],
     send_ready: int,
     stale_non_active_unsent: int,
     draft_ready: int,
@@ -541,6 +586,35 @@ def _recommended_next_step(
 ) -> str:
     if not active_city:
         return "Fix Canada City Queue."
+    if use_ops_status:
+        if ops_queue_counts.get("ready_to_send", 0) > 0:
+            return "Run send dry run."
+        if ops_queue_counts.get("needs_reconciliation", 0) > 0:
+            return "Run reconciliation."
+        if ops_queue_counts.get("ready_to_draft", 0) > 0:
+            return "Generate drafts."
+        if ops_queue_counts.get("needs_casl_review", 0) > 0:
+            return "Work CASL review / run CASL backfill where eligible."
+        if ops_queue_counts.get("needs_email_research", 0) > 0:
+            return "Work manual email research queue."
+        if ops_queue_counts.get("follow_up_due", 0) > 0:
+            return "Run follow-up workflow."
+        active_work = sum(
+            ops_queue_counts.get(key, 0)
+            for key in (
+                "ready_to_send",
+                "needs_reconciliation",
+                "ready_to_draft",
+                "needs_casl_review",
+                "needs_email_research",
+                "follow_up_due",
+            )
+        )
+        if active_work == 0 and (ops_queue_counts.get("sent", 0) + ops_queue_counts.get("replied", 0) > 0):
+            return "Current pool exhausted. Scrape next active city."
+        if ops_queue_counts.get("not_fit", 0) > 0:
+            return "Current pool exhausted. Scrape next active city."
+        return "Review the ops queue manually."
     if send_ready > 0:
         return "Run send dry run."
     if stale_non_active_unsent > 0:
@@ -571,16 +645,23 @@ def _active_city_line() -> Tuple[str, str]:
 
 def main() -> None:
     leads = _load_leads()
+    schema = get_data_source_schema()
+    schema_properties = schema.get("properties", {})
     active_city, active_province = _active_city_line()
     queue_rows, queue_accessible, queue_warning = _load_city_queue_rows()
     queue_summary = _city_queue_summary(queue_rows)
     city_source_label = "ENV fallback city" if queue_warning else "Canada City Queue active city"
+    ops_status_field = _first_existing(schema_properties, OPS_STATUS_CANDIDATES)
+    blocker_reason_field = _first_existing(schema_properties, BLOCKER_REASON_CANDIDATES)
+    ops_status_exists = bool(ops_status_field)
 
     lead_status_counts = _count_by_field(leads, _lead_status)
     gmail_sent_counts = _count_by_field(leads, _lead_gmail_sent_status)
     gmail_match_counts = _count_by_field(leads, _lead_gmail_match_status)
     casl_basis_counts = _count_by_field(leads, _lead_casl_basis)
     duplicate_status_counts = _count_by_field(leads, _lead_duplicate_status)
+    ops_status_counts = _count_by_field(leads, _lead_ops_status)
+    blocker_reason_counts = _count_blocker_reasons(leads)
 
     draft_ready_count = 0
     casl_ready_count = 0
@@ -630,9 +711,22 @@ def main() -> None:
         and manual_casl_review_count == 0
         and draft_exists_drafted_count == 0
     )
+    ops_queue_counts = {
+        "ready_to_send": ops_status_counts.get("ready_to_send", 0),
+        "needs_reconciliation": ops_status_counts.get("needs_reconciliation", 0),
+        "ready_to_draft": ops_status_counts.get("ready_to_draft", 0),
+        "needs_casl_review": ops_status_counts.get("needs_casl_review", 0),
+        "needs_email_research": ops_status_counts.get("needs_email_research", 0),
+        "follow_up_due": ops_status_counts.get("follow_up_due", 0),
+        "sent": ops_status_counts.get("sent", 0),
+        "replied": ops_status_counts.get("replied", 0),
+        "not_fit": ops_status_counts.get("not_fit", 0),
+    }
 
     recommended = _recommended_next_step(
         active_city=active_city,
+        use_ops_status=ops_status_exists,
+        ops_queue_counts=ops_queue_counts,
         send_ready=send_ready_count,
         stale_non_active_unsent=stale_non_active_unsent_count,
         draft_ready=draft_ready_count,
@@ -657,6 +751,23 @@ def main() -> None:
     _print_counter("CASL Basis counts:", casl_basis_counts)
     print("6. Records by Duplicate Status")
     _print_counter("Duplicate Status counts:", duplicate_status_counts)
+    print("Ops Queue Summary")
+    for key in (
+        "ready_to_send",
+        "needs_reconciliation",
+        "ready_to_draft",
+        "needs_casl_review",
+        "needs_email_research",
+        "follow_up_due",
+        "sent",
+        "replied",
+        "not_fit",
+    ):
+        print(f"- {key}: {ops_queue_counts.get(key, 0)}")
+    print("6b. Records by Ops Status")
+    _print_counter("Ops Status counts:", ops_status_counts)
+    print("6c. Records by Blocker Reason")
+    _print_counter("Blocker Reason counts:", blocker_reason_counts)
     print("7. Draft ready count")
     print(f"- {draft_ready_count}")
     print("8. CASL ready count")
@@ -734,6 +845,10 @@ def main() -> None:
         print("- ALLOW_RULE_BASED_APPROVAL=true; admin approval is not counted as a blocker by itself.")
     else:
         print("- ALLOW_RULE_BASED_APPROVAL=false; admin approval remains part of the computed send gate.")
+    if ops_status_exists:
+        print(f"- Ops Status field detected: {ops_status_field}")
+        if blocker_reason_field:
+            print(f"- Blocker Reason field detected: {blocker_reason_field}")
     if queue_warning:
         print(f"- {queue_warning}")
     if not CHECK_GMAIL_DRAFT_HEALTH:
