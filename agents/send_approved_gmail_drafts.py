@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from email.utils import getaddresses, parseaddr
@@ -19,6 +20,7 @@ from src.safety import validate_prospect_copy
 
 SEND_DRY_RUN = os.getenv("SEND_DRY_RUN", "true").strip().lower() in {"1", "true", "yes", "on"}
 SEND_APPROVED_DRAFTS = os.getenv("SEND_APPROVED_DRAFTS", "false").strip().lower() in {"1", "true", "yes", "on"}
+ALLOW_RULE_BASED_APPROVAL = os.getenv("ALLOW_RULE_BASED_APPROVAL", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _max_sends_per_run() -> int:
@@ -67,6 +69,14 @@ REQUIRED_OUTREACH_STATUS = "Email 1 Sent"
 REQUIRED_LEAD_STATUS = "outreach_sent"
 REQUIRED_GMAIL_MATCH_STATUS = "sent_exists"
 REQUIRED_GMAIL_SENT_STATUS = "sent"
+RULE_APPROVAL_ALLOWED_SEND_MODES = {"auto_draft", "auto_send_gated"}
+RULE_APPROVAL_ALLOWED_CASL_BASIS = {
+    "conspicuously_published_business_email",
+    "existing_business_relationship",
+    "referral_or_intro",
+}
+RULE_APPROVAL_ALLOWED_DUPLICATE_STATUS = {"", "unique"}
+RULE_APPROVAL_ALLOWED_GMAIL_MATCH_STATUS = {"", "no_match", "draft_exists"}
 
 
 def get_client() -> Client:
@@ -77,6 +87,12 @@ def get_client() -> Client:
 
 def _normalize_text(text: str) -> str:
     return " ".join(str(text or "").split()).strip().lower()
+
+
+def _normalize_choice(text: str) -> str:
+    normalized = _normalize_text(text)
+    normalized = re.sub(r"[^a-z0-9]+", "_", normalized)
+    return normalized.strip("_")
 
 
 def _first_existing_property_name(properties: Dict[str, Any], candidates: Sequence[str]) -> Optional[str]:
@@ -140,6 +156,10 @@ def _lead_admin_approved(lead: Dict[str, Any]) -> bool:
     ) in {"true", "yes", "approved", "1"}
 
 
+def _lead_website(lead: Dict[str, Any]) -> str:
+    return _lead_property_text(lead, draft_flow.WEBSITE_CANDIDATES)  # type: ignore[attr-defined]
+
+
 def _lead_country(lead: Dict[str, Any]) -> str:
     return _normalize_text(draft_flow._lead_text_value(lead, draft_flow.COUNTRY_CANDIDATES))  # type: ignore[attr-defined]
 
@@ -150,15 +170,115 @@ def _lead_do_not_contact(lead: Dict[str, Any]) -> bool:
     ) in {"true", "yes", "1"}
 
 
-def _lead_send_block_reasons(lead: Dict[str, Any]) -> List[str]:
+def _lead_approval_path(lead: Dict[str, Any]) -> str:
+    if _lead_admin_approved(lead):
+        return "admin"
+    if ALLOW_RULE_BASED_APPROVAL:
+        return "rule"
+    return ""
+
+
+def _rule_based_approval_block_reasons(lead: Dict[str, Any]) -> List[str]:
     reasons: List[str] = []
 
+    send_mode = _normalize_choice(_lead_send_mode(lead))
+    if send_mode not in RULE_APPROVAL_ALLOWED_SEND_MODES:
+        reasons.append(f"Send Mode is {send_mode or '<empty>'}")
+
+    if _lead_country(lead) != "canada":
+        country = draft_flow._lead_text_value(lead, draft_flow.COUNTRY_CANDIDATES)  # type: ignore[attr-defined]
+        reasons.append(f"Country is {country or '<empty>'}")
+
+    if not _lead_email(lead):
+        reasons.append("Email is missing")
+
+    if not _lead_website(lead):
+        reasons.append("Website is missing")
+
+    if not _lead_gmail_draft_id(lead):
+        reasons.append("Gmail Draft ID is missing")
+
+    casl_basis = _normalize_choice(_lead_casl_basis(lead))
+    if casl_basis not in RULE_APPROVAL_ALLOWED_CASL_BASIS:
+        reasons.append(f"CASL Basis is {casl_basis or '<empty>'}")
+
+    if _lead_do_not_contact(lead):
+        reasons.append("Do Not Contact is true")
+
+    duplicate_status = _normalize_choice(_lead_duplicate_status(lead))
+    if duplicate_status not in RULE_APPROVAL_ALLOWED_DUPLICATE_STATUS:
+        reasons.append(f"Duplicate Status is {duplicate_status}")
+
+    gmail_match_status = _normalize_choice(_lead_gmail_match_status(lead))
+    if gmail_match_status not in RULE_APPROVAL_ALLOWED_GMAIL_MATCH_STATUS:
+        reasons.append(f"Gmail Match Status is {gmail_match_status}")
+
+    gmail_sent_status = _lead_gmail_sent_status(lead)
+    if gmail_sent_status in BLOCKED_GMAIL_SENT_STATUSES:
+        reasons.append(f"Gmail Sent Status is {gmail_sent_status}")
+
+    lead_status = _lead_status(lead)
+    if lead_status in BLOCKED_LEAD_STATUSES:
+        reasons.append(f"Lead Status is {lead_status}")
+
+    if not _verified_send_as_email():
+        reasons.append(f"sender alias {settings.gmail_send_as_email} is not verified")
+
+    return reasons
+
+
+def _lead_send_block_reasons(lead: Dict[str, Any]) -> List[str]:
+    reasons: List[str] = []
+    if _lead_approval_path(lead) == "admin":
+        send_mode = _lead_send_mode(lead)
+        if send_mode != REQUIRED_SEND_MODE:
+            reasons.append(f"Send Mode is {send_mode or '<empty>'}")
+
+        if _lead_country(lead) != "canada":
+            country = draft_flow._lead_text_value(lead, draft_flow.COUNTRY_CANDIDATES)  # type: ignore[attr-defined]
+            reasons.append(f"Country is {country or '<empty>'}")
+
+        if _lead_do_not_contact(lead):
+            reasons.append("Do Not Contact is true")
+
+        casl_basis = _lead_casl_basis(lead)
+        if not casl_basis:
+            reasons.append("CASL Basis is missing")
+
+        if not _lead_email(lead):
+            reasons.append("Email is missing")
+
+        if not _lead_gmail_draft_id(lead):
+            reasons.append("Gmail Draft ID is missing")
+
+        lead_status = _lead_status(lead)
+        if lead_status in BLOCKED_LEAD_STATUSES:
+            reasons.append(f"Lead Status is {lead_status}")
+
+        duplicate_status = _lead_duplicate_status(lead)
+        if duplicate_status in BLOCKED_DUPLICATE_STATUSES:
+            reasons.append(f"Duplicate Status is {duplicate_status}")
+
+        gmail_sent_status = _lead_gmail_sent_status(lead)
+        if gmail_sent_status in BLOCKED_GMAIL_SENT_STATUSES:
+            reasons.append(f"Gmail Sent Status is {gmail_sent_status}")
+
+        gmail_match_status = _lead_gmail_match_status(lead)
+        if gmail_match_status in BLOCKED_GMAIL_MATCH_STATUSES:
+            reasons.append(f"Gmail Match Status is {gmail_match_status}")
+
+        if not _verified_send_as_email():
+            reasons.append(f"sender alias {settings.gmail_send_as_email} is not verified")
+        return reasons
+
+    if ALLOW_RULE_BASED_APPROVAL:
+        reasons.extend(_rule_based_approval_block_reasons(lead))
+        return reasons
+
+    reasons.append("Admin Approved is not true")
     send_mode = _lead_send_mode(lead)
     if send_mode != REQUIRED_SEND_MODE:
         reasons.append(f"Send Mode is {send_mode or '<empty>'}")
-
-    if not _lead_admin_approved(lead):
-        reasons.append("Admin Approved is not true")
 
     if _lead_country(lead) != "canada":
         country = draft_flow._lead_text_value(lead, draft_flow.COUNTRY_CANDIDATES)  # type: ignore[attr-defined]
@@ -180,9 +300,7 @@ def _lead_send_block_reasons(lead: Dict[str, Any]) -> List[str]:
         reasons.append("Gmail Draft ID is missing")
 
     lead_status = _lead_status(lead)
-    if not lead_status:
-        reasons.append("Lead Status is missing")
-    elif lead_status in BLOCKED_LEAD_STATUSES:
+    if lead_status in BLOCKED_LEAD_STATUSES:
         reasons.append(f"Lead Status is {lead_status}")
 
     duplicate_status = _lead_duplicate_status(lead)
@@ -337,9 +455,12 @@ def _print_global_gate_status() -> None:
     else:
         print("Global send gate: live mode")
     print(f"- SEND_APPROVED_DRAFTS: {'yes' if SEND_APPROVED_DRAFTS else 'no'}")
+    print(f"- ALLOW_RULE_BASED_APPROVAL: {'yes' if ALLOW_RULE_BASED_APPROVAL else 'no'}")
     print(f"- MAX_SENDS_PER_RUN: {MAX_SENDS_PER_RUN}")
     print(f"- Gmail send-as alias: {settings.gmail_send_as_email}")
     print(f"- Verified alias: {'yes' if verified_send_as_email else 'no'}")
+    if ALLOW_RULE_BASED_APPROVAL:
+        print("Rule-based approval path is enabled.")
     if not SEND_APPROVED_DRAFTS:
         print("GLOBAL BLOCK | SEND_APPROVED_DRAFTS=false")
     if not verified_send_as_email:
@@ -361,6 +482,8 @@ def main() -> None:
     summary = {
         "records_checked": 0,
         "eligible_records": 0,
+        "approved_by_admin": 0,
+        "approved_by_rules": 0,
         "selected": 0,
         "would_send": 0,
         "sent": 0,
@@ -375,6 +498,7 @@ def main() -> None:
         summary["records_checked"] += 1
         lead_name = _lead_name(lead)
         reasons = _lead_send_block_reasons(lead)
+        approval_path = _lead_approval_path(lead)
         draft_id = _lead_gmail_draft_id(lead)
         if reasons:
             summary["skipped"] += 1
@@ -385,6 +509,13 @@ def main() -> None:
                 f"Reasons: {', '.join(reasons)}"
             )
             continue
+
+        if approval_path == "admin":
+            summary["approved_by_admin"] += 1
+        elif approval_path == "rule":
+            summary["approved_by_rules"] += 1
+            if ALLOW_RULE_BASED_APPROVAL:
+                print(f"APPROVED | rule-based approval | {lead_name} | Gmail Draft ID: {draft_id}")
 
         try:
             draft = get_draft(draft_id)
