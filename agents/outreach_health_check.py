@@ -19,7 +19,6 @@ from lead_scraper.src.lead_finder import (
     CITY_NAME_CANDIDATES,
     CITY_STATUS_CANDIDATES,
     PROVINCE_CANDIDATES,
-    resolve_active_city_context,
 )
 from src.config import settings
 from src.gmail_client import extract_draft_details, get_draft, is_stale_gmail_thread_error
@@ -54,6 +53,7 @@ CANONICAL_NEXT_FOLLOW_UP_CANDIDATES = ("Next Follow-up Date", "Next Follow Up Da
 CANONICAL_FOLLOW_UP_DUE_NOW_CANDIDATES = ("Follow-Up Due Now",)
 OPS_STATUS_CANDIDATES = ("Ops Status",)
 BLOCKER_REASON_CANDIDATES = ("Blocker Reason",)
+CITY_QUEUE_COUNTRY_CANDIDATES = ("Country",)
 
 CANADA_COUNTRY = "canada"
 READY_TO_SEND_MODE = "auto_send_gated"
@@ -430,14 +430,51 @@ def _load_leads() -> List[Dict[str, Any]]:
     return leads
 
 
+def _city_queue_database_id() -> str:
+    return settings.canada_city_queue_database_id or settings.city_queue_database_id
+
+
+def _fallback_city() -> str:
+    return os.getenv("ACTIVE_CITY", "").strip()
+
+
+def _fallback_province() -> str:
+    return os.getenv("ACTIVE_PROVINCE", "").strip()
+
+
+def _query_data_source_rows(client: Client, data_source_id: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    next_cursor: Optional[str] = None
+    while True:
+        kwargs: Dict[str, Any] = {"data_source_id": data_source_id, "page_size": 100}
+        if next_cursor:
+            kwargs["start_cursor"] = next_cursor
+        response = client.data_sources.query(**kwargs)
+        rows.extend(response.get("results", []))
+        if not response.get("has_more"):
+            break
+        next_cursor = response.get("next_cursor")
+        if not next_cursor:
+            break
+    return rows
+
+
 def _load_city_queue_rows() -> Tuple[List[Dict[str, Any]], bool, Optional[str]]:
     try:
         client = get_client()
+        queue_database_id = _city_queue_database_id()
+        if queue_database_id:
+            database = client.databases.retrieve(database_id=queue_database_id)
+            data_sources = database.get("data_sources", [])
+            if not data_sources:
+                return [], False, "Canada City Queue not accessible. Share the database with the integration or set ACTIVE_CITY env manually."
+            return _query_data_source_rows(client, data_sources[0]["id"]), True, None
+
         search = getattr(client, "search", None)
         if search is None:
             return [], False, "Canada City Queue not accessible. Share the database with the integration or set ACTIVE_CITY env manually."
 
-        response = search(query=CANADA_CITY_QUEUE_TITLE, filter={"property": "object", "value": "data_source"})
+        response = search(query=CANADA_CITY_QUEUE_TITLE, filter={"property": "object", "value": "database"})
         database_id = ""
         for result in response.get("results", []):
             title_parts = result.get("title", [])
@@ -452,21 +489,7 @@ def _load_city_queue_rows() -> Tuple[List[Dict[str, Any]], bool, Optional[str]]:
         data_sources = database.get("data_sources", [])
         if not data_sources:
             return [], False, "Canada City Queue not accessible. Share the database with the integration or set ACTIVE_CITY env manually."
-
-        rows: List[Dict[str, Any]] = []
-        next_cursor: Optional[str] = None
-        while True:
-            kwargs: Dict[str, Any] = {"data_source_id": data_sources[0]["id"], "page_size": 100}
-            if next_cursor:
-                kwargs["start_cursor"] = next_cursor
-            response = client.data_sources.query(**kwargs)
-            rows.extend(response.get("results", []))
-            if not response.get("has_more"):
-                break
-            next_cursor = response.get("next_cursor")
-            if not next_cursor:
-                break
-        return rows, True, None
+        return _query_data_source_rows(client, data_sources[0]["id"]), True, None
     except Exception:
         return [], False, "Canada City Queue not accessible. Share the database with the integration or set ACTIVE_CITY env manually."
 
@@ -489,6 +512,48 @@ def _city_queue_summary(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "total_rows": len(rows),
         "active_rows": active_rows,
         "status_counts": status_counts,
+    }
+
+
+def _city_queue_row_details(row: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        "city": _city_text(row, tuple(CITY_NAME_CANDIDATES)),
+        "province": _city_text(row, tuple(PROVINCE_CANDIDATES)),
+        "country": _city_text(row, tuple(CITY_QUEUE_COUNTRY_CANDIDATES)),
+        "status": _city_text(row, tuple(CITY_STATUS_CANDIDATES)),
+    }
+
+
+def _active_city_context() -> Dict[str, Any]:
+    rows, accessible, warning = _load_city_queue_rows()
+    active_rows = [
+        row
+        for row in rows
+        if _normalize(_city_text(row, tuple(CITY_STATUS_CANDIDATES))) in ACTIVE_CITY_STATUSES
+    ]
+    if active_rows:
+        chosen = active_rows[0]
+        details = _city_queue_row_details(chosen)
+        return {
+            "source": "Notion City Queue",
+            "city": details.get("city") or _fallback_city(),
+            "province": details.get("province") or _fallback_province(),
+            "country": details.get("country") or "n/a",
+            "accessible": accessible,
+            "warning": warning,
+            "rows": rows,
+            "active_rows": active_rows,
+        }
+
+    return {
+        "source": "ENV fallback city",
+        "city": _fallback_city(),
+        "province": _fallback_province(),
+        "country": "n/a",
+        "accessible": accessible,
+        "warning": warning or "Canada City Queue has no active rows. Using ENV fallback city.",
+        "rows": rows,
+        "active_rows": active_rows,
     }
 
 
@@ -638,19 +703,20 @@ def _print_counter(title: str, counts: Counter[str]) -> None:
         print(f"- {key}: {value}")
 
 
-def _active_city_line() -> Tuple[str, str]:
-    city, province = resolve_active_city_context()
-    return city, province
-
-
 def main() -> None:
     leads = _load_leads()
     schema = get_data_source_schema()
     schema_properties = schema.get("properties", {})
-    active_city, active_province = _active_city_line()
-    queue_rows, queue_accessible, queue_warning = _load_city_queue_rows()
+    city_context = _active_city_context()
+    active_city = city_context["city"]
+    active_province = city_context["province"]
+    active_country = city_context["country"]
+    queue_rows = city_context["rows"]
+    active_rows = city_context["active_rows"]
+    queue_accessible = bool(city_context["accessible"])
+    queue_warning = city_context["warning"]
     queue_summary = _city_queue_summary(queue_rows)
-    city_source_label = "ENV fallback city" if queue_warning else "Canada City Queue active city"
+    city_source_label = city_context["source"]
     ops_status_field = _first_existing(schema_properties, OPS_STATUS_CANDIDATES)
     blocker_reason_field = _first_existing(schema_properties, BLOCKER_REASON_CANDIDATES)
     ops_status_exists = bool(ops_status_field)
@@ -828,7 +894,22 @@ def main() -> None:
         print("- Gmail draft health check: disabled (set CHECK_GMAIL_DRAFT_HEALTH=true)")
 
     print("17. Active city from Canada City Queue")
-    print(f"- {city_source_label}: {active_city}, {active_province}" if active_province else f"- {city_source_label}: {active_city}")
+    print(f"- source: {city_source_label}")
+    print(f"- active city: {active_city or '<not set>'}")
+    print(f"- active province: {active_province or '<not set>'}")
+    print(f"- active country: {active_country or '<not set>'}")
+    if active_rows:
+        print(f"- active rows found: {len(active_rows)}")
+        if len(active_rows) > 1:
+            print("- warning: multiple active city rows found")
+            for row in active_rows:
+                details = _city_queue_row_details(row)
+                city = details.get("city") or "<empty city>"
+                province = details.get("province") or "<empty province>"
+                country = details.get("country") or "<empty country>"
+                print(f"- active row: {city}, {province}, {country}")
+    else:
+        print("- warning: no active city row found in Canada City Queue")
 
     print("18. City queue summary")
     print(f"- total queue rows: {queue_summary['total_rows']}")
@@ -845,12 +926,18 @@ def main() -> None:
         print("- ALLOW_RULE_BASED_APPROVAL=true; admin approval is not counted as a blocker by itself.")
     else:
         print("- ALLOW_RULE_BASED_APPROVAL=false; admin approval remains part of the computed send gate.")
+    if _city_queue_database_id():
+        print("- Canada City Queue lookup mode: direct database ID")
+    else:
+        print("- Canada City Queue lookup mode: safe name-based discovery")
     if ops_status_exists:
         print(f"- Ops Status field detected: {ops_status_field}")
         if blocker_reason_field:
             print(f"- Blocker Reason field detected: {blocker_reason_field}")
     if queue_warning:
         print(f"- {queue_warning}")
+    if not queue_accessible:
+        print("- Canada City Queue not accessible. Share the database with the integration or set ACTIVE_CITY env manually.")
     if not CHECK_GMAIL_DRAFT_HEALTH:
         print("- Gmail draft health check disabled by default; set CHECK_GMAIL_DRAFT_HEALTH=true to enable Gmail checks.")
 

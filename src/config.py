@@ -23,6 +23,8 @@ def _as_int(value: str | None, default: int = 0) -> int:
 class Settings:
     notion_api_key: str
     notion_database_id: str
+    canada_city_queue_database_id: str
+    city_queue_database_id: str
     gmail_credentials_path: str
     gmail_token_path: str
     gmail_client_id: str
@@ -41,6 +43,8 @@ class Settings:
 settings = Settings(
     notion_api_key=os.getenv("NOTION_API_KEY", "").strip(),
     notion_database_id=os.getenv("NOTION_DATABASE_ID", "").strip(),
+    canada_city_queue_database_id=os.getenv("CANADA_CITY_QUEUE_DATABASE_ID", "").strip(),
+    city_queue_database_id=os.getenv("CITY_QUEUE_DATABASE_ID", "").strip(),
     gmail_credentials_path=os.getenv("GMAIL_CREDENTIALS_PATH", "").strip(),
     gmail_token_path=os.getenv("GMAIL_TOKEN_PATH", "").strip(),
     gmail_client_id=os.getenv("GMAIL_CLIENT_ID", "").strip(),
