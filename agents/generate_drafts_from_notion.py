@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from notion_client import Client
+from notion_client.errors import APIResponseError
 
 from src.config import settings
 from src.email_writer import generate_email_sequence
@@ -101,10 +102,13 @@ STAGE_NEW_LEADS = "new_leads"
 STAGE_BACKFILL = "backfill"
 STAGE_FALLBACK = "fallback"
 STAGE_CONFIGS = (
-    (STAGE_NEW_LEADS, ("audit_ready", "draft_ready", "New Lead", "Draft Ready"), True, True),
-    (STAGE_BACKFILL, ("audit_ready", "draft_ready", "New Lead", "Draft Ready"), True, True),
-    (STAGE_FALLBACK, ("audit_ready", "draft_ready", "New Lead", "Draft Ready"), False, False),
+    (STAGE_NEW_LEADS, True, True),
+    (STAGE_BACKFILL, True, True),
+    (STAGE_FALLBACK, False, False),
 )
+
+CANONICAL_LEAD_STATUS_VALUES = ("audit_ready", "outreach_drafted")
+LEGACY_OUTREACH_STATUS_VALUES = ("New Lead", "Draft Ready", "draft_ready")
 
 
 def get_client() -> Client:
@@ -298,22 +302,42 @@ def _build_status_filter(property_name: str, property_type: str, statuses: Tuple
     return {"or": clauses}
 
 
+def _available_status_values_for_field(property_name: str) -> Tuple[str, ...]:
+    if property_name == "Lead Status":
+        return CANONICAL_LEAD_STATUS_VALUES
+    if property_name == "Outreach Status":
+        return LEGACY_OUTREACH_STATUS_VALUES
+    return ()
+
+
+def _candidate_status_field(properties: Dict[str, Any]) -> Tuple[Optional[str], Tuple[str, ...]]:
+    lead_status_property = _first_existing_property_name(properties, ["Lead Status"])
+    if lead_status_property:
+        return lead_status_property, _available_status_values_for_field(lead_status_property)
+
+    outreach_status_property = _first_existing_property_name(properties, ["Outreach Status"])
+    if outreach_status_property:
+        return outreach_status_property, _available_status_values_for_field(outreach_status_property)
+
+    return None, ()
+
+
 def _build_query_filter(
     properties: Dict[str, Any],
+    status_property: Optional[str],
     statuses: Tuple[str, ...],
     require_top_issue: bool,
     require_angle_bucket: bool,
 ) -> Optional[Dict[str, Any]]:
     filter_parts: List[Dict[str, Any]] = []
 
-    outreach_status_property = _first_existing_property_name(properties, STATUS_FIELD_CANDIDATES)
-    if not outreach_status_property:
+    if not status_property:
         _print_available_properties(properties)
         raise ValueError("Lead Status / Outreach Status property is missing from the Notion data source.")
-    _print_detected_fields(properties, [outreach_status_property], "outreach status field")
+    _print_detected_fields(properties, [status_property], "status field")
     status_filter = _build_status_filter(
-        outreach_status_property,
-        properties[outreach_status_property].get("type"),
+        status_property,
+        properties[status_property].get("type"),
         statuses,
     )
     if status_filter:
@@ -413,8 +437,107 @@ def _build_query_filter(
     return {"and": filter_parts}
 
 
+def _build_broad_query_filter(
+    properties: Dict[str, Any],
+    status_property: Optional[str],
+    require_top_issue: bool,
+    require_angle_bucket: bool,
+) -> Optional[Dict[str, Any]]:
+    filter_parts: List[Dict[str, Any]] = []
+
+    if not status_property:
+        _print_available_properties(properties)
+        raise ValueError("Lead Status / Outreach Status property is missing from the Notion data source.")
+
+    _print_detected_fields(properties, [status_property], "status field")
+    status_filter = _build_not_empty_filter(status_property, properties[status_property].get("type"))
+    if status_filter:
+        filter_parts.append(status_filter)
+
+    country_property = _first_existing_property_name(properties, COUNTRY_CANDIDATES)
+    if country_property:
+        _print_detected_fields(properties, [country_property], "country field")
+        country_filter = _build_equality_filter(
+            country_property,
+            properties[country_property].get("type"),
+            "Canada",
+        )
+        if country_filter:
+            filter_parts.append(country_filter)
+
+    duplicate_status_property = _first_existing_property_name(properties, DUPLICATE_STATUS_CANDIDATES)
+    if duplicate_status_property:
+        _print_detected_fields(properties, [duplicate_status_property], "duplicate status field")
+        for blocked_status in ("possible_duplicate", "duplicate", "already_contacted", "do_not_contact"):
+            duplicate_filter = _build_not_equals_filter(
+                duplicate_status_property,
+                properties[duplicate_status_property].get("type"),
+                blocked_status,
+            )
+            if duplicate_filter:
+                filter_parts.append(duplicate_filter)
+
+    gmail_draft_id_property = _first_existing_property_name(properties, GMAIL_DRAFT_ID_CANDIDATES)
+    if gmail_draft_id_property:
+        _print_detected_fields(properties, [gmail_draft_id_property], "Gmail Draft ID field")
+        draft_filter = _build_empty_filter(
+            gmail_draft_id_property,
+            properties[gmail_draft_id_property].get("type"),
+        )
+        if draft_filter:
+            filter_parts.append(draft_filter)
+
+    email_property = _first_existing_property_name(properties, EMAIL_FIELD_CANDIDATES)
+    if email_property:
+        _print_detected_fields(properties, [email_property], "email field")
+        email_filter = _build_not_empty_filter(email_property, properties[email_property].get("type"))
+        if email_filter:
+            filter_parts.append(email_filter)
+
+    website_property = _first_existing_property_name(properties, WEBSITE_CANDIDATES)
+    if website_property:
+        _print_detected_fields(properties, [website_property], "website field")
+        website_filter = _build_not_empty_filter(website_property, properties[website_property].get("type"))
+        if website_filter:
+            filter_parts.append(website_filter)
+
+    if require_top_issue:
+        top_issue_property = _first_existing_property_name(properties, TOP_ISSUE_CANDIDATES)
+        if top_issue_property:
+            _print_detected_fields(properties, [top_issue_property], "Top Issue field")
+            top_issue_filter = _build_not_empty_filter(
+                top_issue_property,
+                properties[top_issue_property].get("type"),
+            )
+            if top_issue_filter:
+                filter_parts.append(top_issue_filter)
+
+    if require_angle_bucket:
+        angle_bucket_property = _first_existing_property_name(properties, ANGLE_BUCKET_CANDIDATES)
+        if angle_bucket_property:
+            _print_detected_fields(properties, [angle_bucket_property], "Angle Bucket field")
+            angle_bucket_filter = _build_not_empty_filter(
+                angle_bucket_property,
+                properties[angle_bucket_property].get("type"),
+            )
+            if angle_bucket_filter:
+                filter_parts.append(angle_bucket_filter)
+
+    dnc_property = _first_existing_property_name(properties, DO_NOT_CONTACT_CANDIDATES)
+    if dnc_property:
+        _print_detected_fields(properties, [dnc_property], "do-not-contact field")
+        dnc_filter = _build_checkbox_filter(dnc_property, properties[dnc_property].get("type"), False)
+        if dnc_filter:
+            filter_parts.append(dnc_filter)
+
+    if not filter_parts:
+        return None
+    if len(filter_parts) == 1:
+        return filter_parts[0]
+    return {"and": filter_parts}
+
+
 def _query_draft_candidates(
-    statuses: Tuple[str, ...],
     limit: int,
     require_top_issue: bool,
     require_angle_bucket: bool,
@@ -423,20 +546,79 @@ def _query_draft_candidates(
     _, data_source_id = get_database_and_data_source()
     schema = get_data_source_schema()
     properties = schema.get("properties", {})
+    status_property, statuses = _candidate_status_field(properties)
+    if not status_property:
+        return []
+
     filter_payload = _build_query_filter(
         properties,
+        status_property,
         statuses,
         require_top_issue=require_top_issue,
         require_angle_bucket=require_angle_bucket,
     )
     if not filter_payload:
         return []
-    response = client.data_sources.query(
-        data_source_id=data_source_id,
-        filter=filter_payload,
-        page_size=limit,
-    )
-    return list(response.get("results", []))
+
+    try:
+        response = client.data_sources.query(
+            data_source_id=data_source_id,
+            filter=filter_payload,
+            page_size=limit,
+        )
+        return list(response.get("results", []))
+    except APIResponseError as error:
+        error_message = str(error).lower()
+        if "select option" not in error_message and "status" not in error_message:
+            raise
+
+        print(
+            "Warning: Notion rejected the status filter for the candidate query; "
+            "retrying with a broader filter and local status filtering."
+        )
+        broad_filter = _build_broad_query_filter(
+            properties,
+            status_property,
+            require_top_issue=require_top_issue,
+            require_angle_bucket=require_angle_bucket,
+        )
+        if not broad_filter:
+            return []
+
+        results: List[Dict[str, Any]] = []
+        next_cursor: Optional[str] = None
+        while len(results) < limit:
+            query_kwargs: Dict[str, Any] = {
+                "data_source_id": data_source_id,
+                "filter": broad_filter,
+                "page_size": min(100, max(limit, 25)),
+            }
+            if next_cursor:
+                query_kwargs["start_cursor"] = next_cursor
+            response = client.data_sources.query(**query_kwargs)
+            page_results = list(response.get("results", []))
+            if not page_results:
+                break
+            for page in page_results:
+                if _draft_candidate_status_matches(page, status_property, statuses):
+                    results.append(page)
+                    if len(results) >= limit:
+                        break
+            if not response.get("has_more"):
+                break
+            next_cursor = response.get("next_cursor")
+            if not next_cursor:
+                break
+        return results
+
+
+def _draft_candidate_status_matches(lead: Dict[str, Any], status_property: str, statuses: Tuple[str, ...]) -> bool:
+    if not statuses:
+        return False
+    status_value = _get_text_value(_get_property(lead, status_property))
+    if not status_value:
+        return False
+    return status_value in statuses
 
 
 def _print_available_properties(properties: Dict[str, Any]) -> None:
@@ -695,15 +877,15 @@ def _log_skip_details(lead: Dict[str, Any], reason: str) -> None:
 
 
 def query_new_leads(limit: int = MAX_DRAFTS_PER_RUN) -> List[Dict[str, Any]]:
-    return _query_draft_candidates(("audit_ready", "draft_ready", "New Lead", "Draft Ready"), limit, require_top_issue=True, require_angle_bucket=True)
+    return _query_draft_candidates(limit, require_top_issue=True, require_angle_bucket=True)
 
 
 def query_backfill_leads(limit: int = MAX_DRAFTS_PER_RUN) -> List[Dict[str, Any]]:
-    return _query_draft_candidates(("audit_ready", "draft_ready", "New Lead", "Draft Ready"), limit, require_top_issue=True, require_angle_bucket=True)
+    return _query_draft_candidates(limit, require_top_issue=True, require_angle_bucket=True)
 
 
 def query_fallback_leads(limit: int = MAX_DRAFTS_PER_RUN) -> List[Dict[str, Any]]:
-    return _query_draft_candidates(("audit_ready", "draft_ready", "New Lead", "Draft Ready"), limit, require_top_issue=False, require_angle_bucket=False)
+    return _query_draft_candidates(limit, require_top_issue=False, require_angle_bucket=False)
 
 
 def _collect_draft_candidates() -> List[Tuple[str, Dict[str, Any]]]:
@@ -723,7 +905,7 @@ def _collect_draft_candidates() -> List[Tuple[str, Dict[str, Any]]]:
             added += 1
         return added
 
-    for stage_name, _statuses, _require_top_issue, _require_angle_bucket in STAGE_CONFIGS:
+    for stage_name, _require_top_issue, _require_angle_bucket in STAGE_CONFIGS:
         if stage_name == STAGE_BACKFILL and len(selected) >= MAX_DRAFTS_PER_RUN:
             stage_query_counts[stage_name] = 0
             continue
