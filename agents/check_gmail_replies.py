@@ -10,13 +10,14 @@ from typing import Any, Dict, Optional
 from notion_client import Client
 
 from src.config import settings
-from src.gmail_client import get_profile_email, get_thread, search_messages
+from src.gmail_client import get_profile_email, get_thread, is_stale_gmail_thread_error, search_messages
 from src.notion_client import get_database_and_data_source, get_data_source_schema
 
 
 ACTIVE_SENT_STATUSES = {"email 1 sent", "email 2 sent", "outreach_sent"}
-STOP_STATUSES = {"Replied", "Closed", "Call Booked", "Not Interested", "Do Not Contact"}
-TERMINAL_LEAD_STATUSES = {"not_fit"}
+STOP_STATUSES = {"replied", "closed", "call booked", "not interested", "do not contact"}
+BLOCKED_LEAD_STATUSES = {"not_fit", "archived", "paid_client"}
+TERMINAL_LEAD_STATUSES = STOP_STATUSES | BLOCKED_LEAD_STATUSES
 NAME_CANDIDATES = ("Business Name", "Practice Name", "Clinic Name", "Name")
 EMAIL_CANDIDATES = ("Email", "Contact Email")
 LEAD_STATUS_CANDIDATES = ("Lead Status", "Outreach Status")
@@ -24,9 +25,11 @@ REPLY_STATUS_CANDIDATES = ("Reply Status",)
 GMAIL_SENT_STATUS_CANDIDATES = ("Gmail Sent Status",)
 GMAIL_MATCH_STATUS_CANDIDATES = ("Gmail Match Status",)
 GMAIL_THREAD_ID_CANDIDATES = ("Gmail Thread ID",)
+DO_NOT_CONTACT_CANDIDATES = ("Do Not Contact", "DNC")
 LAST_OUTREACH_DATE_CANDIDATES = ("Last Outreach Date", "Last Email Sent At", "Email 1 Date")
 SEQUENCE_STEP_CANDIDATES = ("Sequence Step",)
-SCRAPE_NOTES_CANDIDATES = ("Scrape Notes",)
+REPLY_NOTES_CANDIDATES = ("Reply Notes",)
+REPLY_NOTES_VALUE = "Replied via Gmail reply checker."
 
 
 def get_client() -> Client:
@@ -91,6 +94,13 @@ def _add_update(updates: Dict[str, Any], schema_properties: Dict[str, Any], cand
         updates[property_name] = update
 
 
+def _checkbox_true(properties: Dict[str, Any], candidates: tuple[str, ...]) -> bool:
+    property_name = _first_existing(properties, candidates)
+    if not property_name:
+        return False
+    return bool(properties.get(property_name, {}).get("checkbox"))
+
+
 def _load_pages(data_source_id: str) -> list[Dict[str, Any]]:
     client = get_client()
     pages: list[Dict[str, Any]] = []
@@ -148,13 +158,14 @@ def _search_has_reply_from_lead(lead_email: str, last_outreach: Optional[date]) 
 
 def _build_reply_updates(schema_properties: Dict[str, Any]) -> Dict[str, Any]:
     updates: Dict[str, Any] = {}
-    if _first_existing(schema_properties, LEAD_STATUS_CANDIDATES):
+    if _first_existing(schema_properties, ("Lead Status",)):
         _add_update(updates, schema_properties, ("Lead Status",), "replied")
-        _add_update(updates, schema_properties, GMAIL_MATCH_STATUS_CANDIDATES, "replied")
     else:
         _add_update(updates, schema_properties, REPLY_STATUS_CANDIDATES, "Replied")
         _add_update(updates, schema_properties, ("Outreach Status",), "Replied")
         _add_update(updates, schema_properties, SEQUENCE_STEP_CANDIDATES, "Replied")
+    _add_update(updates, schema_properties, GMAIL_MATCH_STATUS_CANDIDATES, "replied")
+    _add_update(updates, schema_properties, REPLY_NOTES_CANDIDATES, REPLY_NOTES_VALUE)
     return updates
 
 
@@ -168,8 +179,10 @@ def main() -> None:
     summary = {
         "records_checked": 0,
         "replies_found": 0,
+        "would_update": 0,
         "records_updated": 0,
         "skipped": 0,
+        "stale_gmail_thread_id": 0,
         "errors": 0,
     }
 
@@ -188,7 +201,13 @@ def main() -> None:
             reply_status = _text(properties.get(reply_field or "", {})).strip().lower()
             gmail_sent_status = _text(properties.get(gmail_sent_field or "", {})).strip().lower()
             gmail_match_status = _text(properties.get(gmail_match_field or "", {})).strip().lower()
-            if lead_status in TERMINAL_LEAD_STATUSES or lead_status == "replied" or reply_status == "replied" or gmail_match_status == "replied":
+            if (
+                lead_status in TERMINAL_LEAD_STATUSES
+                or lead_status == "replied"
+                or reply_status == "replied"
+                or gmail_match_status == "replied"
+                or _checkbox_true(properties, DO_NOT_CONTACT_CANDIDATES)
+            ):
                 summary["skipped"] += 1
                 continue
             if gmail_sent_status != "sent" and lead_status not in ACTIVE_SENT_STATUSES:
@@ -204,16 +223,29 @@ def main() -> None:
 
             thread_id = _text(properties.get(thread_field or "", {}))
             last_outreach = _date_value(properties.get(last_outreach_field or "", {}))
-            replied = _thread_has_reply_from_lead(thread_id, lead_email, my_email) or _search_has_reply_from_lead(
-                lead_email,
-                last_outreach,
-            )
+            replied = False
+            if thread_id:
+                try:
+                    replied = _thread_has_reply_from_lead(thread_id, lead_email, my_email)
+                except Exception as exc:
+                    if is_stale_gmail_thread_error(exc):
+                        summary["stale_gmail_thread_id"] += 1
+                        summary["skipped"] += 1
+                        print(f"Skipped {_lead_name(page)}: stale Gmail thread ID {thread_id}")
+                        continue
+                    raise
+            if not replied:
+                replied = _search_has_reply_from_lead(
+                    lead_email,
+                    last_outreach,
+                )
             if not replied:
                 continue
 
             summary["replies_found"] += 1
             if settings.dry_run:
-                print(f"DRY RUN: would mark replied: {_lead_name(page)} ({lead_email})")
+                summary["would_update"] += 1
+                print(f"DRY RUN: WOULD MARK REPLIED: {_lead_name(page)} ({lead_email})")
                 continue
 
             updates = _build_reply_updates(schema_properties)

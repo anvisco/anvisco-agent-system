@@ -180,6 +180,14 @@ def get_thread(thread_id: str) -> Dict[str, Any]:
     return get_gmail_service().users().threads().get(userId="me", id=thread_id, format="metadata").execute()
 
 
+def is_stale_gmail_thread_error(exc: Exception) -> bool:
+    if not isinstance(exc, HttpError):
+        return False
+    status = getattr(exc.resp, "status", None)
+    message = str(exc).lower()
+    return status == 404 or "notfound" in message or "not found" in message
+
+
 def get_draft(draft_id: str) -> Dict[str, Any]:
     return get_gmail_service().users().drafts().get(userId="me", id=draft_id, format="full").execute()
 
