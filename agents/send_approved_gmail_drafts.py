@@ -63,6 +63,7 @@ GMAIL_SENT_STATUS_CANDIDATES = draft_flow.GMAIL_SENT_STATUS_CANDIDATES
 ADMIN_APPROVED_CANDIDATES = draft_flow.ADMIN_APPROVED_CANDIDATES
 CASL_BASIS_CANDIDATES = draft_flow.CASL_BASIS_CANDIDATES
 SEND_MODE_CANDIDATES = draft_flow.SEND_MODE_CANDIDATES
+SEQUENCE_STEP_CANDIDATES = draft_flow.SEQUENCE_STEP_CANDIDATES
 LAST_EMAIL_SENT_AT_CANDIDATES = draft_flow.LAST_EMAIL_SENT_AT_CANDIDATES
 LAST_OUTREACH_DATE_CANDIDATES = draft_flow.LAST_OUTREACH_DATE_CANDIDATES
 NEXT_FOLLOW_UP_DATE_CANDIDATES = draft_flow.NEXT_FOLLOW_UP_DATE_CANDIDATES
@@ -490,13 +491,13 @@ def build_notion_send_updates(
     follow_up_date = _business_days_from(now, 3)
 
     _set_update(updates, schema_properties, GMAIL_SENT_STATUS_CANDIDATES, REQUIRED_GMAIL_SENT_STATUS)
-    _set_update(updates, schema_properties, ["Outreach Status"], REQUIRED_OUTREACH_STATUS)
-    _set_update(updates, schema_properties, ["Lead Status"], REQUIRED_LEAD_STATUS)
-    _set_update(updates, schema_properties, LAST_EMAIL_SENT_AT_CANDIDATES, sent_date)
+    if _set_update(updates, schema_properties, ["Lead Status"], REQUIRED_LEAD_STATUS) is None:
+        _set_update(updates, schema_properties, ["Outreach Status"], REQUIRED_OUTREACH_STATUS)
     _set_update(updates, schema_properties, LAST_OUTREACH_DATE_CANDIDATES, sent_date)
     if thread_id:
         _set_update(updates, schema_properties, GMAIL_THREAD_ID_CANDIDATES, thread_id)
     _set_update(updates, schema_properties, GMAIL_MATCH_STATUS_CANDIDATES, REQUIRED_GMAIL_MATCH_STATUS)
+    _set_update(updates, schema_properties, SEQUENCE_STEP_CANDIDATES, "Email 1 Sent")
     _set_update(
         updates,
         schema_properties,

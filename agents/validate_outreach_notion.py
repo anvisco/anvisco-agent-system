@@ -147,7 +147,7 @@ def main() -> None:
         audit_status_field = _first_existing(properties, AUDIT_STATUS_CANDIDATES)
         lead_status = _text(properties.get(lead_status_field or "", {})).lower()
         audit_status = _text(properties.get(audit_status_field or "", {})).lower()
-        if lead_status not in {"audit_ready", "draft_ready", "new lead", "draft ready"} and audit_status != "complete":
+        if lead_status not in {"audit_ready", "outreach_drafted", "draft_ready", "new lead", "draft ready"} and audit_status != "complete":
             continue
         new_lead_count += 1
         name = _field_value(page, "Business Name", title_property) or page["id"]

@@ -14,16 +14,17 @@ from src.gmail_client import get_profile_email, get_thread, search_messages
 from src.notion_client import get_database_and_data_source, get_data_source_schema
 
 
-ACTIVE_SENT_STATUSES = {"Email 1 Sent", "Email 2 Sent"}
+ACTIVE_SENT_STATUSES = {"email 1 sent", "email 2 sent", "outreach_sent"}
 STOP_STATUSES = {"Replied", "Closed", "Call Booked", "Not Interested", "Do Not Contact"}
 TERMINAL_LEAD_STATUSES = {"not_fit"}
 NAME_CANDIDATES = ("Business Name", "Practice Name", "Clinic Name", "Name")
 EMAIL_CANDIDATES = ("Email", "Contact Email")
 LEAD_STATUS_CANDIDATES = ("Lead Status", "Outreach Status")
-OUTREACH_STATUS_CANDIDATES = ("Outreach Status",)
 REPLY_STATUS_CANDIDATES = ("Reply Status",)
+GMAIL_SENT_STATUS_CANDIDATES = ("Gmail Sent Status",)
+GMAIL_MATCH_STATUS_CANDIDATES = ("Gmail Match Status",)
 GMAIL_THREAD_ID_CANDIDATES = ("Gmail Thread ID",)
-LAST_OUTREACH_DATE_CANDIDATES = ("Last Email Sent At", "Last Outreach Date", "Email 1 Date")
+LAST_OUTREACH_DATE_CANDIDATES = ("Last Outreach Date", "Last Email Sent At", "Email 1 Date")
 SEQUENCE_STEP_CANDIDATES = ("Sequence Step",)
 SCRAPE_NOTES_CANDIDATES = ("Scrape Notes",)
 
@@ -147,9 +148,13 @@ def _search_has_reply_from_lead(lead_email: str, last_outreach: Optional[date]) 
 
 def _build_reply_updates(schema_properties: Dict[str, Any]) -> Dict[str, Any]:
     updates: Dict[str, Any] = {}
-    _add_update(updates, schema_properties, REPLY_STATUS_CANDIDATES, "Replied")
-    _add_update(updates, schema_properties, OUTREACH_STATUS_CANDIDATES, "Replied")
-    _add_update(updates, schema_properties, SEQUENCE_STEP_CANDIDATES, "Replied")
+    if _first_existing(schema_properties, LEAD_STATUS_CANDIDATES):
+        _add_update(updates, schema_properties, ("Lead Status",), "replied")
+        _add_update(updates, schema_properties, GMAIL_MATCH_STATUS_CANDIDATES, "replied")
+    else:
+        _add_update(updates, schema_properties, REPLY_STATUS_CANDIDATES, "Replied")
+        _add_update(updates, schema_properties, ("Outreach Status",), "Replied")
+        _add_update(updates, schema_properties, SEQUENCE_STEP_CANDIDATES, "Replied")
     return updates
 
 
@@ -171,20 +176,22 @@ def main() -> None:
     for page in pages:
         try:
             properties = page.get("properties", {})
-            status_field = _first_existing(properties, OUTREACH_STATUS_CANDIDATES)
+            status_field = _first_existing(properties, LEAD_STATUS_CANDIDATES)
             reply_field = _first_existing(properties, REPLY_STATUS_CANDIDATES)
+            gmail_sent_field = _first_existing(properties, GMAIL_SENT_STATUS_CANDIDATES)
+            gmail_match_field = _first_existing(properties, GMAIL_MATCH_STATUS_CANDIDATES)
             email_field = _first_existing(properties, EMAIL_CANDIDATES)
             thread_field = _first_existing(properties, GMAIL_THREAD_ID_CANDIDATES)
             last_outreach_field = _first_existing(properties, LAST_OUTREACH_DATE_CANDIDATES)
 
-            outreach_status = _text(properties.get(status_field or "", {}))
-            lead_status_field = _first_existing(properties, LEAD_STATUS_CANDIDATES)
-            lead_status = _text(properties.get(lead_status_field or "", {})).strip().lower()
+            lead_status = _text(properties.get(status_field or "", {})).strip().lower()
             reply_status = _text(properties.get(reply_field or "", {})).strip().lower()
-            if lead_status in TERMINAL_LEAD_STATUSES or outreach_status in STOP_STATUSES or reply_status == "replied":
+            gmail_sent_status = _text(properties.get(gmail_sent_field or "", {})).strip().lower()
+            gmail_match_status = _text(properties.get(gmail_match_field or "", {})).strip().lower()
+            if lead_status in TERMINAL_LEAD_STATUSES or lead_status == "replied" or reply_status == "replied" or gmail_match_status == "replied":
                 summary["skipped"] += 1
                 continue
-            if outreach_status not in ACTIVE_SENT_STATUSES:
+            if gmail_sent_status != "sent" and lead_status not in ACTIVE_SENT_STATUSES:
                 summary["skipped"] += 1
                 continue
 

@@ -21,7 +21,7 @@ CONTACTED_OR_CLOSED = {
     "Closed",
     "not_fit",
 }
-EARLY_STAGE = {"New Lead", "Draft Ready", "audit_ready", "draft_ready"}
+EARLY_STAGE = {"New Lead", "Draft Ready", "audit_ready", "draft_ready", "outreach_drafted"}
 SOURCE_GOOGLE_PLACES_NEW = "Google Places New"
 LEAD_STATUS_CANDIDATES = ("Lead Status",)
 AUDIT_STATUS_CANDIDATES = ("Audit Status",)
@@ -219,12 +219,14 @@ def ensure_source_option(schema_properties: Dict[str, Any], data_source_id: str)
 
 def _lead_key_values(page: Dict[str, Any]) -> Dict[str, str]:
     props = page.get("properties", {})
+    lead_status = _plain_text(props.get("Lead Status", {}))
+    outreach_status = _plain_text(props.get("Outreach Status", {}))
     return {
         "google_place_id": _plain_text(props.get("Google Place ID", {})),
         "domain": normalize_domain(_plain_text(props.get("Domain", {})) or _plain_text(props.get("Website", {}))),
         "phone": clean_phone(_plain_text(props.get("Phone", {}))),
         "name_address": f"{_plain_text(props.get('Business Name', {})).lower()}|{_plain_text(props.get('Address', {})).lower()}",
-        "status": _plain_text(props.get("Outreach Status", {})),
+        "status": lead_status or outreach_status,
         "last_scraped": _plain_text(props.get("Last Scraped Date", {})),
         "score": _plain_text(props.get("Lead Quality Score", {})),
     }

@@ -66,7 +66,7 @@ ANGLE_BUCKET_CANDIDATES = ["Angle Bucket"]
 LOOM_RECOMMENDED_CANDIDATES = ["Loom Recommended"]
 LOOM_SCRIPT_CANDIDATES = ["Loom Script"]
 SEQUENCE_STEP_CANDIDATES = ["Sequence Step"]
-LAST_OUTREACH_DATE_CANDIDATES = ["Last Email Sent At", "Last Outreach Date"]
+LAST_OUTREACH_DATE_CANDIDATES = ["Last Outreach Date", "Last Email Sent At"]
 NEXT_FOLLOW_UP_DATE_CANDIDATES = ["Next Follow-up Date", "Next Follow Up Date"]
 REPLY_STATUS_CANDIDATES = ["Reply Status"]
 GMAIL_DRAFT_ID_CANDIDATES = ["Gmail Draft ID"]
@@ -91,8 +91,11 @@ CASL_BASIS_CANDIDATES = ["CASL Basis"]
 SEND_MODE_CANDIDATES = ["Send Mode"]
 AUTO_SEND_ELIGIBLE_CANDIDATES = ["Auto-Send Eligible"]
 LAST_EMAIL_DRAFTED_AT_CANDIDATES = ["Last Email Drafted At"]
-LAST_EMAIL_SENT_AT_CANDIDATES = ["Last Email Sent At", "Last Outreach Date"]
+LAST_EMAIL_SENT_AT_CANDIDATES = ["Last Outreach Date", "Last Email Sent At"]
 FOLLOW_UP_DUE_NOW_CANDIDATES = ["Follow-Up Due Now"]
+
+DRAFT_READY_STATUS_VALUES = {"New Lead", "Draft Ready", "audit_ready", "draft_ready", "outreach_drafted"}
+SENT_STATUS_VALUES = {"Email 1 Sent", "Email 2 Sent", "outreach_sent"}
 
 CANADA_COUNTRY = "canada"
 TERMINAL_LEAD_STATUSES = {"not_fit"}
@@ -1003,7 +1006,7 @@ def print_no_eligible_lead_debug(schema: Dict[str, Any]) -> None:
         do_not_contact = _get_checkbox_value(_get_property(lead, dnc_property or ""))
 
         reason = ""
-        if outreach_status_value not in {"New Lead", "Draft Ready", "audit_ready", "draft_ready"}:
+        if outreach_status_value not in DRAFT_READY_STATUS_VALUES:
             counts["status"] += 1
             reason = f"{outreach_status_property or 'Outreach Status'} was not draft-ready"
         elif not email_value:
@@ -1054,12 +1057,12 @@ def print_validation_warnings(schema: Dict[str, Any]) -> None:
         lead_name = _get_lead_name(lead)
         outreach_status = _get_text_value(_get_property(lead, outreach_status_property))
 
-        if outreach_status in {"Draft Ready", "draft_ready"} and email_draft_property:
+        if outreach_status in {"Draft Ready", "draft_ready", "outreach_drafted"} and email_draft_property:
             email_draft = _get_text_value(_get_property(lead, email_draft_property))
             if not email_draft:
                 print(f"Warning: {lead_name} is draft-ready but Email Draft is empty.")
 
-        if outreach_status == "Email 1 Sent" and email_1_date_property:
+        if outreach_status in {"Email 1 Sent", "outreach_sent"} and email_1_date_property:
             if not _has_date_value(_get_property(lead, email_1_date_property)):
                 print(f"Warning: {lead_name} is Email 1 Sent but Email 1 Date is missing.")
 
@@ -1156,15 +1159,21 @@ def build_email_1_sequence_updates(
         if thread_id:
             _add_update(updates, properties, GMAIL_THREAD_ID_CANDIDATES, thread_id)
         _add_update(updates, properties, SEQUENCE_STEP_CANDIDATES, "Email 1 Drafted")
-        _add_update(updates, properties, OUTREACH_STATUS_FIELD_CANDIDATES, "draft_ready")
+        if _first_existing_property_name(properties, ["Lead Status"]):
+            _add_update(updates, properties, ["Lead Status"], "outreach_drafted")
+        else:
+            _add_update(updates, properties, OUTREACH_STATUS_FIELD_CANDIDATES, "draft_ready")
         _add_update(updates, properties, LAST_EMAIL_DRAFTED_AT_CANDIDATES, datetime.now(timezone.utc).date().isoformat())
 
     if sent_message_id:
         _add_update(updates, properties, GMAIL_THREAD_ID_CANDIDATES, thread_id or sent_message_id)
         _add_update(updates, properties, GMAIL_SENT_STATUS_CANDIDATES, sent_status or "Sent")
         _add_update(updates, properties, SEQUENCE_STEP_CANDIDATES, "Email 1 Sent")
-        _add_update(updates, properties, OUTREACH_STATUS_FIELD_CANDIDATES, "Email 1 Sent")
-        _add_update(updates, properties, LAST_EMAIL_SENT_AT_CANDIDATES, datetime.now(timezone.utc).date().isoformat())
+        if _first_existing_property_name(properties, ["Lead Status"]):
+            _add_update(updates, properties, ["Lead Status"], "outreach_sent")
+        else:
+            _add_update(updates, properties, OUTREACH_STATUS_FIELD_CANDIDATES, "Email 1 Sent")
+        _add_update(updates, properties, LAST_OUTREACH_DATE_CANDIDATES, datetime.now(timezone.utc).date().isoformat())
 
     return updates
 
@@ -1285,7 +1294,7 @@ def _process_new_lead(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
     if blocked_reasons:
         _log_skip_details(lead, "; ".join(blocked_reasons))
         return "skipped_wrong_status"
-    if outreach_status not in {"New Lead", "Draft Ready", "audit_ready", "draft_ready"}:
+    if outreach_status not in DRAFT_READY_STATUS_VALUES:
         _log_skip_details(lead, f"Outreach Status is {outreach_status or '<empty>'}")
         return "skipped_wrong_status"
     if not business_name:
@@ -1399,20 +1408,23 @@ def _process_due_followup(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
     lead_name = _get_lead_name(lead)
     properties = lead.get("properties", {})
     outreach_status_property = _first_existing_property_name(properties, STATUS_FIELD_CANDIDATES)
+    sequence_step_property = _first_existing_property_name(properties, SEQUENCE_STEP_CANDIDATES)
     outreach_status = _get_text_value(_get_property(lead, outreach_status_property or ""))
+    sequence_step = _get_text_value(_get_property(lead, sequence_step_property or ""))
     email_property = _first_existing_property_name(properties, EMAIL_FIELD_CANDIDATES)
     email = _get_text_value(_get_property(lead, email_property or ""))
     verified_from_email = get_preferred_send_as_email(settings.gmail_send_as_email)
     alias_verified = bool(verified_from_email)
+    lead_status = _normalize_text(outreach_status)
     blocked_reasons = _draft_block_reasons(lead, require_unique_duplicate=False, require_gmail_match_no_match=False)
     if blocked_reasons:
         print(f"Skipped {lead_name}: {', '.join(blocked_reasons)}")
         return "skipped"
 
-    if outreach_status == "Email 1 Sent":
+    if sequence_step == "Email 1 Sent" or outreach_status == "Email 1 Sent" or (lead_status == "outreach_sent" and not sequence_step):
         target_step = "Email 2 Drafted"
         email_step = "email_2"
-    elif outreach_status == "Email 2 Sent":
+    elif sequence_step == "Email 2 Sent" or outreach_status == "Email 2 Sent":
         target_step = "Email 3 Drafted"
         email_step = "email_3"
     else:
@@ -1473,14 +1485,21 @@ def _sync_manual_sent_steps(schema: Dict[str, Any]) -> None:
         last_outreach = _get_date_value(_get_property(lead, last_outreach_property or ""))
         next_followup = _get_date_value(_get_property(lead, next_followup_property or ""))
 
-        if outreach_status == "Email 1 Sent" and (sequence_step != "Email 1 Sent" or not last_outreach or not next_followup):
+        if (
+            sequence_step == "Email 1 Sent"
+            or outreach_status == "Email 1 Sent"
+            or (outreach_status == "outreach_sent" and not sequence_step)
+        ) and (sequence_step != "Email 1 Sent" or not last_outreach or not next_followup):
             if settings.dry_run:
                 print(f"DRY RUN: would set follow-up schedule for {_get_lead_name(lead)} after Email 1 Sent")
                 continue
             updates = build_manual_sent_updates(schema, "Email 1 Sent", 3)
             if updates:
                 update_notion_lead(lead["id"], updates)
-        elif outreach_status == "Email 2 Sent" and (sequence_step != "Email 2 Sent" or not last_outreach or not next_followup):
+        elif (
+            sequence_step == "Email 2 Sent"
+            or outreach_status == "Email 2 Sent"
+        ) and (sequence_step != "Email 2 Sent" or not last_outreach or not next_followup):
             if settings.dry_run:
                 print(f"DRY RUN: would set follow-up schedule for {_get_lead_name(lead)} after Email 2 Sent")
                 continue

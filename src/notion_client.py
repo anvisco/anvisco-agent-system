@@ -12,7 +12,6 @@ TEST_LEAD = {
     "Website": "https://example.com",
     "Email": "test@example.com",
     "Lead Status": "audit_ready",
-    "Outreach Status": "draft_ready",
     "Source": "Codex Notion Test",
 }
 
