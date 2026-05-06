@@ -18,6 +18,23 @@ EMAIL_2_SUBJECT = "Follow-up"
 EMAIL_3_SUBJECT = "Follow-up"
 FALLBACK_RECOMMENDED_OFFER = "Website improvements"
 FALLBACK_ANGLE_BUCKET = "visibility_trust_booking"
+SERVICE_PHRASE_MAP = {
+    "cleaning": "family, cosmetic, and denture care",
+    "cosmetic": "family, cosmetic, and denture care",
+    "denture": "family, cosmetic, and denture care",
+    "invisalign": "Invisalign care",
+    "implant": "implant dentistry",
+    "emergency": "emergency dental care",
+    "orthodontic": "orthodontic care",
+}
+COMMON_NAME_REPLACEMENTS = (
+    (" Family and Cosmetic Dentistry", " Dentistry"),
+    (" Family Dentistry", " Dentistry"),
+    (" Cosmetic Dentistry", " Dentistry"),
+    (" Dental Clinic", " Dentistry"),
+    (" Dental Center", " Dentistry"),
+    (" Dental Care", " Dentistry"),
+)
 
 
 def _extract_text(value: Dict[str, Any]) -> str:
@@ -164,7 +181,27 @@ def _lead_province(lead: Dict[str, Any]) -> str:
 
 
 def _lead_services(lead: Dict[str, Any]) -> List[str]:
-    return _dedupe_preserve_order(_split_fragments(_get_first_property_text(lead, SERVICE_FIELDS)))
+    raw_services = _split_fragments(_get_first_property_text(lead, SERVICE_FIELDS))
+    mapped: List[str] = []
+    seen_clusters: set[str] = set()
+    for service in raw_services:
+        normalized = service.strip()
+        if not normalized:
+            continue
+        mapped_service = ""
+        lowered = normalized.lower()
+        for key, phrase in SERVICE_PHRASE_MAP.items():
+            if key in lowered:
+                mapped_service = phrase
+                break
+        if not mapped_service:
+            mapped_service = normalized
+        key = mapped_service.lower()
+        if key in seen_clusters:
+            continue
+        seen_clusters.add(key)
+        mapped.append(mapped_service)
+    return _dedupe_preserve_order(mapped)
 
 
 def _lead_languages(lead: Dict[str, Any]) -> List[str]:
@@ -227,42 +264,91 @@ def _lead_recommended_offer(lead: Dict[str, Any]) -> str:
     return _get_first_property_text(lead, RECOMMENDED_OFFER_FIELDS) or FALLBACK_RECOMMENDED_OFFER
 
 
+def _service_summary(lead: Dict[str, Any]) -> str:
+    services = _lead_services(lead)
+    if not services:
+        return ""
+
+    grouped: List[str] = []
+    family_group_used = False
+    for service in services:
+        lowered = service.lower()
+        mapped = ""
+        for key, phrase in SERVICE_PHRASE_MAP.items():
+            if key in lowered:
+                mapped = phrase
+                break
+        if mapped == "family, cosmetic, and denture care":
+            if family_group_used:
+                continue
+            family_group_used = True
+            grouped.append(mapped)
+            continue
+        if mapped:
+            grouped.append(mapped)
+        else:
+            grouped.append(service)
+
+    grouped = _dedupe_preserve_order(grouped)
+    if not grouped:
+        return ""
+    if len(grouped) == 1:
+        return grouped[0]
+    if len(grouped) == 2 and grouped[0] == "family, cosmetic, and denture care":
+        return f"{grouped[0]}, plus {grouped[1]}"
+    if grouped[0] == "family, cosmetic, and denture care":
+        return f"{grouped[0]}, plus " + ", ".join(grouped[1:])
+    if len(grouped) == 2:
+        return f"{grouped[0]} and {grouped[1]}"
+    return ", ".join(grouped[:-1]) + f", and {grouped[-1]}"
+
+
 def _clinic_strength_fragments(lead: Dict[str, Any]) -> List[str]:
     strengths: List[str] = []
+    seen: set[str] = set()
+
+    def add_strength(text: str) -> None:
+        normalized = text.strip()
+        if not normalized:
+            return
+        key = normalized.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        strengths.append(normalized)
 
     strongest_advantage = _lead_strongest_advantage(lead)
     if strongest_advantage:
-        strengths.append(strongest_advantage)
+        add_strength(strongest_advantage)
 
-    services = _lead_services(lead)
-    for service in services[:3]:
-        if service:
-            strengths.append(service)
+    service_summary = _service_summary(lead)
+    if service_summary:
+        add_strength(f"a wide service mix across {service_summary}")
 
     languages = _lead_languages(lead)
     if languages:
-        strengths.append(f"multilingual support in {', '.join(languages[:2])}")
+        add_strength(f"multilingual support in {', '.join(languages)}")
 
     review_count = _lead_review_count(lead)
     review_text = _format_count(review_count, "review")
     if review_text:
-        strengths.append(f"review profile with {review_text}")
+        add_strength(f"{review_text} patient reviews")
 
     rating = _lead_rating(lead)
     if rating:
-        strengths.append(f"rating around {rating}")
+        add_strength(f"a strong {rating}-star review profile")
 
     booking_url = _lead_booking_url(lead)
     if booking_url:
-        strengths.append("a clear booking path")
+        add_strength("a clear booking path")
 
     website = _lead_website(lead)
     if website.startswith("https://"):
-        strengths.append("a secure HTTPS site")
+        add_strength("a secure HTTPS site")
 
     city = _lead_city(lead)
     if city:
-        strengths.append(f"a local presence in {city}")
+        add_strength(f"a local presence in {city}")
 
     return _dedupe_preserve_order(strengths)[:7]
 
@@ -270,21 +356,43 @@ def _clinic_strength_fragments(lead: Dict[str, Any]) -> List[str]:
 def _subject_hook(lead: Dict[str, Any], fallback: str) -> str:
     subject_angle = _lead_subject_angle(lead)
     if subject_angle:
-        return subject_angle
+        return _shorten_subject_text(subject_angle, lead)
 
-    business_name = _lead_business_name(lead)
+    business_name = _short_business_name(_lead_business_name(lead))
     strongest_advantage = _lead_strongest_advantage(lead)
-    patient_type_location_angle = _lead_patient_type_location_angle(lead)
+    explicit_patient_type_location_angle = _get_property_text(lead, "Patient Type / Location Angle")
+    city = _lead_city(lead)
     review_count = _lead_review_count(lead)
     rating = _lead_rating(lead)
 
     if strongest_advantage:
-        return f"Is {business_name}'s {strongest_advantage} clear enough?"
-    if patient_type_location_angle:
-        return f"Are {patient_type_location_angle} seeing {business_name}'s strongest reasons to book?"
+        return _shorten_subject_text(f"Is {business_name}'s {strongest_advantage} clear enough?", lead)
+    if explicit_patient_type_location_angle:
+        return _shorten_subject_text(
+            f"Are {explicit_patient_type_location_angle} seeing {business_name}'s strongest reasons to book?",
+            lead,
+        )
+    if city:
+        return _shorten_subject_text(f"Are patients in {city} seeing {business_name}'s strongest reasons to book?", lead)
     if review_count or rating:
-        return f"Is {business_name} getting picked, or just compared?"
-    return fallback.format(business_name=business_name)
+        return _shorten_subject_text(f"Is {business_name} getting picked, or just compared?", lead)
+    return _shorten_subject_text(fallback.format(business_name=business_name), lead)
+
+
+def _short_business_name(business_name: str) -> str:
+    shortened = business_name.strip()
+    for old, new in COMMON_NAME_REPLACEMENTS:
+        if old.lower() in shortened.lower():
+            shortened = shortened.replace(old, new)
+    return shortened
+
+
+def _shorten_subject_text(subject_text: str, lead: Dict[str, Any]) -> str:
+    full_name = _lead_business_name(lead).strip()
+    short_name = _short_business_name(full_name)
+    if full_name and short_name and full_name != short_name:
+        subject_text = subject_text.replace(full_name, short_name)
+    return subject_text
 
 
 def _followup_subject(lead: Dict[str, Any], variant: int) -> str:
@@ -318,40 +426,58 @@ def _join_strengths(lead: Dict[str, Any]) -> str:
 def _build_first_email_body(lead: Dict[str, Any], strengths: List[str], business_impact: str, email_angle: str) -> str:
     business_name = escape(_lead_business_name(lead))
     city = escape(_lead_city(lead))
-    country = escape(_lead_country(lead))
+    service_summary = escape(_service_summary(lead))
     strength_sentence = ""
     if strengths:
-        strength_sentence = f"The clinic has real strengths: {escape(_join_strengths(lead))}. That is a lot to work with."
+        review_count = _lead_review_count(lead)
+        rating = _lead_rating(lead)
+        review_phrase = []
+        if rating:
+            review_phrase.append(f"a strong {escape(rating)}-star review profile")
+        if review_count:
+            review_phrase.append(f"{escape(review_count)} patient reviews")
+        review_text = ", ".join(review_phrase)
+        parts = []
+        if review_text:
+            parts.append(review_text)
+        languages = _lead_languages(lead)
+        if languages:
+            parts.append(f"multilingual support in {escape(', '.join(languages))}")
+        if service_summary:
+            parts.append(f"a wide service mix across {service_summary}")
+        if parts:
+            if len(parts) == 1:
+                summary = parts[0]
+            elif len(parts) == 2:
+                summary = f"{parts[0]} and {parts[1]}"
+            else:
+                summary = ", ".join(parts[:-1]) + f", and {parts[-1]}"
+            strength_sentence = f"The clinic has real strengths: {summary}. That is a lot to work with."
+        else:
+            strength_sentence = f"The clinic has real strengths: {escape(_join_strengths(lead))}. That is a lot to work with."
     else:
         strength_sentence = "There is still a solid base to work with."
 
-    issue_sentence = business_impact or ""
-    if not issue_sentence:
-        top_issues = _lead_top_issues(lead)
-        if top_issues:
-            issue_sentence = (
-                f"The gap I noticed is that {escape(top_issues[0].lower())}. "
-                "That can cost attention before someone books."
-            )
-        else:
-            issue_sentence = (
-                "The gap I noticed is that the strengths are not structured in a way that is easy to scan or act on."
-            )
+    if city:
+        issue_sentence = (
+            f"For patients comparing dentists in {city}, unclear service paths or booking steps can cost attention before someone ever books."
+        )
+    elif business_impact:
+        issue_sentence = escape(business_impact)
     else:
-        issue_sentence = escape(issue_sentence)
+        issue_sentence = "The gap I noticed is that these strengths could be easier to scan and act on."
 
     search_sentence = email_angle or ""
-    if not search_sentence:
-        if city:
-            search_sentence = (
-                f"It also matters for how people search now. When someone asks Google, Maps, or AI tools for a clinic in {city}, "
-                "the clinic with the clearest service structure and trust signals has the advantage."
-            )
-        else:
-            search_sentence = (
-                "It also matters for how people search now. When someone asks Google, Maps, or AI tools for a dental clinic, "
-                "the clinic with the clearest service structure and trust signals has the advantage."
-            )
+    if not search_sentence and city:
+        search_sentence = (
+            f"It also matters for how people search now. When someone asks Google, Maps, or AI tools for a dentist in {city}, "
+            "the clinic with the clearest service structure and trust signals has the advantage."
+        )
+    elif not search_sentence:
+        search_sentence = (
+            "It also matters for how people search now. When someone asks Google, Maps, or AI tools for a dental clinic, "
+            "the clinic with the clearest service structure and trust signals has the advantage."
+        )
     search_sentence = escape(search_sentence)
 
     cta_sentence = (
@@ -399,12 +525,12 @@ def _build_followup_body(lead: Dict[str, Any], variant: int = 1) -> str:
     if city:
         city_sentence = (
             f"For patients comparing clinics near {city}, that clarity matters. "
-            "If the call-to-action, navigation, or booking flow takes too much effort to understand, attention can shift to another clinic before they ever call."
+            "If the call-to-action or booking steps take too much effort to understand, attention can shift to another clinic before they ever call."
         )
     else:
         city_sentence = (
             "For patients comparing clinics in the area, that clarity matters. "
-            "If the call-to-action, navigation, or booking flow takes too much effort to understand, attention can shift to another clinic before they ever call."
+            "If the call-to-action or booking steps take too much effort to understand, attention can shift to another clinic before they ever call."
         )
 
     search_sentence = email_angle or (
