@@ -223,12 +223,14 @@ def resolve_active_city_context() -> tuple[str, str]:
 def _build_search_plan() -> list[tuple[str, str]]:
     if settings.one_city_per_run:
         city, province = resolve_active_city_context()
-        locations = [f"{city}, {province}".strip(", ")]
-    else:
-        locations = _rotate(
-            settings.locations,
-            _today_rotation_offset(len(settings.locations)),
-        )
+        location = f"{city}, {province}".strip(", ")
+        queries = settings.dental_search_queries[: settings.max_search_queries_per_run]
+        return [(location, query) for query in queries if query]
+
+    locations = _rotate(
+        settings.locations,
+        _today_rotation_offset(len(settings.locations)),
+    )
     queries = _rotate(settings.query_variations, _today_rotation_offset(len(settings.query_variations)) + 1)
     if not locations or not queries:
         return []
@@ -249,8 +251,7 @@ def _dedupe_key(place: Dict[str, Any], location: str) -> tuple[str, str]:
         return "phone", phone
 
     name = _display_name(place).strip().lower()
-    address = place.get("formattedAddress", "").strip().lower()
-    return "name_address", f"{name}|{address or location.lower()}"
+    return "name_city", f"{name}|{location.lower()}"
 
 
 def _to_found_lead(place: Dict[str, Any], location: str) -> FoundLead:
@@ -277,17 +278,21 @@ def find_local_leads(logger: DailyLogger | None = None) -> List[FoundLead]:
     seen_keys: set[tuple[str, str]] = set()
 
     search_plan = _build_search_plan()
-    for location, query_term in search_plan:
+    if logger:
+        logger.event(f"Search query cap: {settings.max_search_queries_per_run}")
+        logger.event(f"Search queries configured: {len(settings.dental_search_queries)}")
+    for index, (location, query_term) in enumerate(search_plan, start=1):
         query = f"{query_term} in {location}, {settings.country_scope}"
         if logger:
             logger.event(f"Location used: {location}")
             logger.event(f"Country scope: {settings.country_scope}")
-            logger.event(f"Query used: {query_term}")
+            logger.event(f"Query {index}/{len(search_plan)} used: {query}")
+            logger.count("queries_run")
         places = _search_places_new(query)
         duplicates_skipped = 0
         if logger:
             logger.count("candidates_found", len(places))
-            logger.event(f"Candidates found: {len(places)}")
+            logger.event(f"Candidates returned for query {index}: {len(places)}")
 
         for place in places:
             if len(found) >= settings.max_total_candidates:
@@ -316,6 +321,9 @@ def find_local_leads(logger: DailyLogger | None = None) -> List[FoundLead]:
         if logger:
             logger.event(f"Duplicates skipped: {duplicates_skipped}")
             logger.event(f"Unique leads kept so far: {len(found)}")
+            logger.event(f"Unique candidates after dedupe so far: {len(found)}")
 
     print(f"Total unique leads found: {len(found)}")
+    if logger:
+        logger.event(f"Unique candidates after dedupe across all queries: {len(found)}")
     return found

@@ -43,6 +43,8 @@ class ScraperSettings:
     niche: str
     locations: list[str]
     query_variations: list[str]
+    dental_search_queries: list[str]
+    max_search_queries_per_run: int
     max_new_leads_per_run: int
     max_places_results_per_location: int
     max_total_candidates: int
@@ -78,6 +80,11 @@ def _max_new_leads_per_run() -> int:
     return _bounded_int(configured, 1, 50)
 
 
+def _max_search_queries_per_run() -> int:
+    configured = _as_int(os.getenv("MAX_SEARCH_QUERIES_PER_RUN"), 8)
+    return _bounded_int(configured, 1, 16)
+
+
 def _parse_csv_env(name: str, default: str) -> list[str]:
     raw = os.getenv(name, default)
     return [item.strip() for item in raw.split(",") if item.strip()]
@@ -109,10 +116,15 @@ settings = ScraperSettings(
     one_city_per_run=_as_bool(os.getenv("ONE_CITY_PER_RUN"), default=True),
     niche=os.getenv("LEAD_SCRAPER_NICHE", "dental clinic").strip(),
     locations=_build_locations(),
+    dental_search_queries=_parse_csv_env(
+        "DENTAL_SEARCH_QUERIES",
+        "dental clinic, dentist, family dentist, cosmetic dentist, emergency dentist, Invisalign dentist, dental implants, denture clinic, orthodontist, teeth whitening dentist, kids dentist, pediatric dentist, root canal dentist, dental hygiene clinic, same day dentist, weekend dentist",
+    ),
     query_variations=_parse_csv_env(
         "LEAD_SCRAPER_QUERIES",
         "dental clinic, dentist, cosmetic dentist, family dentist, dental office",
     ),
+    max_search_queries_per_run=_max_search_queries_per_run(),
     max_new_leads_per_run=_max_new_leads_per_run(),
     max_places_results_per_location=_bounded_int(_as_int(os.getenv("MAX_PLACES_RESULTS_PER_LOCATION"), 20), 1, 20),
     max_total_candidates=_bounded_int(_as_int(os.getenv("MAX_TOTAL_CANDIDATES"), 60), 1, 200),

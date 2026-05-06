@@ -177,6 +177,7 @@ def run_daily_scrape() -> None:
 
     accepted_count = 0
     seen_domains: set[str] = set()
+    seen_emails: set[str] = set()
 
     for found in found_leads[: settings.max_total_candidates]:
         if accepted_count >= settings.max_new_leads_per_run:
@@ -205,6 +206,13 @@ def run_daily_scrape() -> None:
             if not scraped.email:
                 logger.event("No email found on website")
             else:
+                email = scraped.email.strip().lower()
+                if email in seen_emails:
+                    logger.count("duplicates_skipped")
+                    logger.count("email_duplicates_skipped")
+                    logger.skip(found.business_name, domain, f"Duplicate email found in current run: {email}")
+                    continue
+                seen_emails.add(email)
                 logger.count("usable_email_leads")
             audited = audit_lead(found, scraped)
             duplicate = find_duplicate(audited, existing_pages)
