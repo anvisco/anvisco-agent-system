@@ -23,7 +23,7 @@ from src.email_writer import (
     _lead_services,
     _short_business_name,
 )
-from src.gmail_client import get_gmail_service, list_drafts, update_draft
+from src.gmail_client import get_draft, list_drafts, update_draft
 from src.safety import validate_prospect_copy
 
 
@@ -140,23 +140,47 @@ def _draft_id(draft: Dict[str, Any]) -> str:
 
 
 def _draft_subject(draft: Dict[str, Any]) -> str:
-    return _header(_draft_message(draft), "Subject").strip()
+    subject = _header(_draft_message(draft), "Subject").strip()
+    if subject:
+        return subject
+    return str(draft.get("subject", "") or "").strip()
 
 
 def _draft_to_header(draft: Dict[str, Any]) -> str:
-    return _header(_draft_message(draft), "To").strip()
+    to_header = _header(_draft_message(draft), "To").strip()
+    if to_header:
+        return to_header
+    to_value = draft.get("to", [])
+    if isinstance(to_value, list):
+        return ", ".join(str(value).strip() for value in to_value if str(value).strip())
+    return str(to_value or "").strip()
 
 
 def _draft_cc_header(draft: Dict[str, Any]) -> str:
-    return _header(_draft_message(draft), "Cc").strip()
+    cc_header = _header(_draft_message(draft), "Cc").strip()
+    if cc_header:
+        return cc_header
+    cc_value = draft.get("cc", [])
+    if isinstance(cc_value, list):
+        return ", ".join(str(value).strip() for value in cc_value if str(value).strip())
+    return str(cc_value or "").strip()
 
 
 def _draft_bcc_header(draft: Dict[str, Any]) -> str:
-    return _header(_draft_message(draft), "Bcc").strip()
+    bcc_header = _header(_draft_message(draft), "Bcc").strip()
+    if bcc_header:
+        return bcc_header
+    bcc_value = draft.get("bcc", [])
+    if isinstance(bcc_value, list):
+        return ", ".join(str(value).strip() for value in bcc_value if str(value).strip())
+    return str(bcc_value or "").strip()
 
 
 def _draft_from_header(draft: Dict[str, Any]) -> str:
-    return _header(_draft_message(draft), "From").strip()
+    from_header = _header(_draft_message(draft), "From").strip()
+    if from_header:
+        return from_header
+    return str(draft.get("from_", "") or "").strip()
 
 
 def _draft_in_reply_to(draft: Dict[str, Any]) -> str:
@@ -189,26 +213,6 @@ def _draft_search_text(draft: Dict[str, Any]) -> str:
 def _draft_has_outreach_markers(draft: Dict[str, Any]) -> bool:
     text = _draft_search_text(draft).lower()
     return any(marker in text for marker in OUTREACH_MARKERS)
-
-
-def _label_id_by_name(label_name: str) -> str:
-    try:
-        response = get_gmail_service().users().labels().list(userId="me").execute()
-    except Exception:
-        return ""
-    for label in response.get("labels", []):
-        if label.get("name") == label_name:
-            return str(label.get("id", "") or "").strip()
-    return ""
-
-
-def _draft_has_label(draft: Dict[str, Any], label_name: str) -> bool:
-    label_id = _label_id_by_name(label_name)
-    if not label_id:
-        return False
-    draft_labels = set(_draft_message(draft).get("labelIds", []) or [])
-    draft_labels.update(draft.get("labelIds", []) or [])
-    return label_id in draft_labels
 
 
 def _draft_business_name(draft: Dict[str, Any]) -> str:
@@ -294,6 +298,30 @@ def _build_notion_indexes(leads: List[Dict[str, Any]]) -> Dict[str, Dict[str, Li
         lead["properties"] = properties
 
     return indexes
+
+
+def _recipient_in_notion(recipient_emails: Iterable[str], indexes: Dict[str, Dict[str, List[Dict[str, Any]]]]) -> bool:
+    notion_emails = set(indexes["email"].keys())
+    return any(email in notion_emails for email in recipient_emails)
+
+
+def _draft_candidate_reason(
+    draft: Dict[str, Any],
+    indexes: Dict[str, Dict[str, List[Dict[str, Any]]]],
+) -> Tuple[bool, str]:
+    to_emails = _split_emails(_draft_to_header(draft))
+    draft_id = _draft_id(draft)
+    thread_id = _draft_thread_id(draft)
+
+    if _recipient_in_notion(to_emails, indexes):
+        return True, "recipient email found in Notion"
+    if draft_id and draft_id in indexes["draft_id"]:
+        return True, "Gmail Draft ID found in Notion"
+    if thread_id and thread_id in indexes["thread_id"]:
+        return True, "Gmail Thread ID found in Notion"
+    if _draft_has_outreach_markers(draft):
+        return True, "Anvis outreach markers found"
+    return False, "no Notion match or Anvis marker"
 
 
 def _candidate_leads_from_indexes(
@@ -514,32 +542,45 @@ def _regenerate_draft(lead: Dict[str, Any]) -> Dict[str, str]:
     return {"subject": subject, "body": body}
 
 
-def _draft_should_be_considered(draft: Dict[str, Any], notion_email_index: Dict[str, List[Dict[str, Any]]]) -> bool:
-    if _draft_has_label(draft, settings.gmail_label):
-        return True
-    if _draft_has_outreach_markers(draft):
-        return True
-    for email in _split_emails(_draft_to_header(draft)):
-        if email in notion_email_index:
-            return True
-    return False
-
-
 def _summarize_draft(draft: Dict[str, Any]) -> str:
     subject = _draft_subject(draft) or "<no subject>"
     to_header = _draft_to_header(draft) or "<no recipient>"
     return f"{subject} | To: {to_header}"
 
 
+def _expand_draft(draft: Dict[str, Any]) -> Dict[str, Any]:
+    draft_id = _draft_id(draft)
+    if not draft_id:
+        return draft
+    try:
+        expanded = get_draft(draft_id)
+    except Exception:
+        return draft
+    if "id" not in expanded:
+        expanded["id"] = draft_id
+    if "message" not in expanded and draft.get("message"):
+        expanded["message"] = draft.get("message")
+    return expanded
+
+
 def main() -> None:
     leads = draft_flow.query_all_leads_for_debug()
     indexes = _build_notion_indexes(leads)
 
-    gmail_drafts = list_drafts()
+    gmail_drafts = [_expand_draft(draft) for draft in list_drafts()]
     total_found = len(gmail_drafts)
     selected: List[Dict[str, Any]] = []
+    diagnostics: List[str] = []
     for draft in gmail_drafts:
-        if _draft_should_be_considered(draft, indexes["email"]):
+        candidate, reason = _draft_candidate_reason(draft, indexes)
+        recipients = _split_emails(_draft_to_header(draft))
+        recipient_in_notion = _recipient_in_notion(recipients, indexes)
+        if len(diagnostics) < 10:
+            diagnostics.append(
+                f"- recipients: {', '.join(recipients) or '<none>'}; in Notion: {'yes' if recipient_in_notion else 'no'}; "
+                f"candidate: {'yes' if candidate else 'no'}; reason: {reason}"
+            )
+        if candidate:
             selected.append(draft)
 
     selected = selected[:MAX_REDRAFTS_PER_RUN]
@@ -561,6 +602,9 @@ def main() -> None:
     print(f"- max redrafts per run: {MAX_REDRAFTS_PER_RUN}")
     print(f"- Gmail drafts found: {total_found}")
     print(f"- candidate drafts selected: {len(selected)}")
+    print("First 10 draft recipient diagnostics:")
+    for line in diagnostics:
+        print(line)
 
     for draft in selected:
         draft_id = _draft_id(draft)
@@ -575,7 +619,7 @@ def main() -> None:
         lead, match_status = _choose_lead_for_draft(draft, indexes)
         if not lead:
             summary["skipped_no_match"] += 1
-            print(f"SKIP | no match | {draft_id} | {subject or '<no subject>'}")
+            print(f"SKIP | no match | {draft_id} | {subject or '<no subject>'} | {match_status}")
             continue
 
         safe_reasons = _lead_safe_for_redraft(lead)
