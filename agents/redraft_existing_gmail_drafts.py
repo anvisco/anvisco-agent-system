@@ -470,7 +470,11 @@ def _build_redraft_subject(lead: Dict[str, Any]) -> str:
     business_name = _short_business_name(email_lead_business_name(lead))
     city = _display_city(lead)
     if city:
+        if business_name.rstrip("’'\"").lower().endswith("s"):
+            return f"Are patients in {city} seeing why {business_name} is worth choosing?"
         return f"Are patients in {city} seeing {business_name}'s strongest reasons to book?"
+    if business_name.rstrip("’'\"").lower().endswith("s"):
+        return f"Is {business_name} easy enough to choose online?"
     return f"Is {business_name}'s booking path clear enough?"
 
 

@@ -405,26 +405,59 @@ def _subject_hook(lead: Dict[str, Any], fallback: str) -> str:
     review_count = _lead_review_count(lead)
     rating = _lead_rating(lead)
 
+    avoid_possessive = _subject_should_avoid_possessive(business_name)
     if strongest_advantage:
+        if avoid_possessive:
+            if city:
+                return _shorten_subject_text(f"Are patients in {city} seeing why {business_name} is worth choosing?", lead)
+            return _shorten_subject_text(f"Is {business_name} easy enough to choose online?", lead)
         return _shorten_subject_text(f"Is {business_name}'s {strongest_advantage} clear enough?", lead)
     if explicit_patient_type_location_angle:
+        if avoid_possessive:
+            if city:
+                return _shorten_subject_text(
+                    f"Are {explicit_patient_type_location_angle} seeing why {business_name} is worth choosing?",
+                    lead,
+                )
+            return _shorten_subject_text(f"Is {business_name} easy enough to choose online?", lead)
         return _shorten_subject_text(
             f"Are {explicit_patient_type_location_angle} seeing {business_name}'s strongest reasons to book?",
             lead,
         )
     if city:
+        if avoid_possessive:
+            return _shorten_subject_text(f"Are patients in {city} seeing why {business_name} is worth choosing?", lead)
         return _shorten_subject_text(f"Are patients in {city} seeing {business_name}'s strongest reasons to book?", lead)
     if review_count or rating:
+        if avoid_possessive:
+            return _shorten_subject_text(f"Is {business_name} getting picked, or just compared?", lead)
         return _shorten_subject_text(f"Is {business_name} getting picked, or just compared?", lead)
     return _shorten_subject_text(fallback.format(business_name=business_name), lead)
 
 
 def _short_business_name(business_name: str) -> str:
-    shortened = business_name.strip()
-    for old, new in COMMON_NAME_REPLACEMENTS:
-        if old.lower() in shortened.lower():
-            shortened = shortened.replace(old, new)
+    shortened = " ".join(business_name.strip().split())
+    if not shortened:
+        return shortened
+
+    if "," in shortened:
+        shortened = shortened.split(",", 1)[0].strip()
+
+    lowered = shortened.lower()
+    if lowered.startswith(("dr ", "dr.")):
+        for old, new in COMMON_NAME_REPLACEMENTS:
+            if old.lower() in lowered:
+                shortened = shortened.replace(old, new)
+                lowered = shortened.lower()
+
     return shortened
+
+
+def _subject_should_avoid_possessive(business_name: str) -> bool:
+    cleaned = business_name.strip().rstrip("’'\"")
+    if not cleaned:
+        return True
+    return cleaned.lower().endswith("s")
 
 
 def _shorten_subject_text(subject_text: str, lead: Dict[str, Any]) -> str:
@@ -682,26 +715,47 @@ def _loom_recommended(lead: Dict[str, Any], angle_bucket: str) -> bool:
 
 
 def _best_followup_subject(lead: Dict[str, Any], angle_bucket: str) -> str:
-    business_name = _lead_business_name(lead)
+    business_name = _short_business_name(_lead_business_name(lead))
     strongest_advantage = _lead_strongest_advantage(lead)
     patient_type_location_angle = _lead_patient_type_location_angle(lead)
+    city = _lead_city(lead)
+    avoid_possessive = _subject_should_avoid_possessive(business_name)
 
     if strongest_advantage:
+        if avoid_possessive:
+            if city:
+                return f"Follow-up: Are patients in {city} seeing why {business_name} is worth choosing?"
+            return f"Follow-up: Is {business_name} easy enough to choose online?"
         return f"Follow-up: Is {business_name}'s {strongest_advantage} clear enough?"
     if patient_type_location_angle:
+        if avoid_possessive:
+            if city:
+                return f"Follow-up: Are {patient_type_location_angle} seeing why {business_name} is worth choosing?"
+            return f"Follow-up: Is {business_name} easy enough to choose online?"
         return f"Follow-up: Are {patient_type_location_angle} seeing {business_name}'s strongest reasons to book?"
     if angle_bucket in {"No Booking Funnel", "Too Many CTAs"}:
+        if avoid_possessive:
+            return f"Follow-up: Is {business_name} easy enough to choose online?"
         return f"Follow-up: Is {business_name} losing ready-to-book patients?"
     if angle_bucket in {"Weak Mobile Experience", "Outdated Website"}:
+        if avoid_possessive:
+            return f"Follow-up: Is {business_name} getting picked, or just compared?"
         return f"Follow-up: Is {business_name}'s trust signal working properly?"
+    if avoid_possessive:
+        return f"Follow-up: Is {business_name} getting picked, or just compared?"
     return f"Follow-up: Is {business_name} getting picked, or just compared?"
 
 
 def _secondary_followup_subject(lead: Dict[str, Any], angle_bucket: str) -> str:
-    business_name = _lead_business_name(lead)
+    business_name = _short_business_name(_lead_business_name(lead))
+    avoid_possessive = _subject_should_avoid_possessive(business_name)
     if angle_bucket in {"No Booking Funnel", "Too Many CTAs"}:
+        if avoid_possessive:
+            return f"Follow-up: Is {business_name} easy enough to choose online?"
         return f"Follow-up: Is {business_name} making it easy enough to choose you?"
     if angle_bucket in {"No Multilingual Support"}:
+        if avoid_possessive:
+            return f"Follow-up: Is {business_name} getting picked, or just compared?"
         return f"Follow-up: Is {business_name}'s multilingual advantage clear enough?"
     return f"Follow-up: A visibility gap I noticed for {business_name}"
 
