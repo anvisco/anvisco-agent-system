@@ -14,7 +14,13 @@ from googleapiclient.errors import HttpError
 
 from agents import generate_drafts_from_notion as draft_flow
 from src.config import settings
-from src.gmail_client import extract_draft_details, get_draft, get_preferred_send_as_email, send_draft
+from src.gmail_client import (
+    apply_label_to_message,
+    extract_draft_details,
+    get_draft,
+    get_preferred_send_as_email,
+    send_draft,
+)
 from src.notion_client import get_data_source_schema, get_database_and_data_source
 from src.safety import validate_prospect_copy
 
@@ -548,6 +554,8 @@ def main() -> None:
         "sent": 0,
         "notion_updated": 0,
         "notion_update_failed": 0,
+        "sent_labels_applied": 0,
+        "sent_label_apply_failed": 0,
         "skipped": 0,
         "stale_gmail_draft_id": 0,
         "not_active_draft": 0,
@@ -629,6 +637,8 @@ def main() -> None:
             print(f"- html body chars: {len(html_body)}")
         if plain_body:
             print(f"- plain body chars: {len(plain_body)}")
+        if SEND_DRY_RUN or not SEND_APPROVED_DRAFTS:
+            print("- sent message would be labeled after send: Anvis/Leads")
 
     verified_send_as_email = _verified_send_as_email()
     if SEND_DRY_RUN or not SEND_APPROVED_DRAFTS or not verified_send_as_email:
@@ -654,8 +664,31 @@ def main() -> None:
 
             print(f"SENDING | {lead_name} | draft {draft_id} | message {message_id or '<none>'} | labels {label_ids}")
             sent = send_draft(draft_id)
+            sent_message_id = str(sent.get("id", "") or sent.get("messageId", "") or sent.get("message_id", "") or "").strip()
             sent_thread_id = str(sent.get("threadId", "") or sent.get("thread_id", "") or "").strip()
-            print(f"SENT | {lead_name} | draft {draft_id} | thread {sent_thread_id or '<none>'}")
+            print(
+                f"SENT | {lead_name} | draft {draft_id} | message {sent_message_id or '<none>'} | "
+                f"thread {sent_thread_id or '<none>'}"
+            )
+
+            if sent_message_id:
+                try:
+                    if SEND_DRY_RUN or not SEND_APPROVED_DRAFTS:
+                        print(
+                            f"LABEL WOULD APPLY | {lead_name} | message {sent_message_id} | label Anvis/Leads"
+                        )
+                    else:
+                        apply_label_to_message(sent_message_id, "Anvis/Leads")
+                        summary["sent_labels_applied"] += 1
+                except Exception as exc:
+                    summary["sent_label_apply_failed"] += 1
+                    print(f"Warning: could not apply Gmail label 'Anvis/Leads' to sent message {sent_message_id}: {exc}")
+            else:
+                summary["sent_label_apply_failed"] += 1
+                print(
+                    f"Warning: could not apply Gmail label 'Anvis/Leads' because Gmail returned no sent message id "
+                    f"for draft {draft_id}."
+                )
 
             updates = build_notion_send_updates(schema_properties, lead, sent_thread_id)
             if updates:

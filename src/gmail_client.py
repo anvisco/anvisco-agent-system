@@ -324,6 +324,35 @@ def _apply_label_to_draft_message(message_id: str, label_name: str) -> None:
         print(f"Warning: could not apply Gmail label '{label_name}' to draft message {message_id}: {exc}")
 
 
+def apply_label_to_message(message_id: str, label_name: str) -> None:
+    if not message_id or not label_name:
+        return
+    label_id = ensure_gmail_label(label_name)
+    if not label_id:
+        print(f"Warning: Gmail label '{label_name}' could not be created or found.")
+        return
+
+    service = get_gmail_service()
+    try:
+        service.users().messages().modify(
+            userId="me",
+            id=message_id,
+            body={"addLabelIds": [label_id]},
+        ).execute()
+        print(f"Applied Gmail label '{label_name}' to sent message {message_id}.")
+    except HttpError as exc:
+        message = str(exc).lower()
+        if "insufficient" in message or "403" in message:
+            print(
+                f"Warning: could not apply Gmail label '{label_name}' to sent message {message_id} "
+                "(insufficient Gmail scope). Re-authenticate Gmail after deleting gmail_token.json."
+            )
+            return
+        print(f"Warning: could not apply Gmail label '{label_name}' to sent message {message_id}: {exc}")
+    except Exception as exc:
+        print(f"Warning: could not apply Gmail label '{label_name}' to sent message {message_id}: {exc}")
+
+
 def _label_created_or_updated_draft(draft_id: str, label_name: str) -> None:
     if not draft_id or not label_name:
         return
