@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from notion_client import Client
+from googleapiclient.errors import HttpError
 
 from agents import generate_drafts_from_notion as draft_flow
 from src.config import settings
@@ -326,6 +327,22 @@ def _draft_from_email(draft_details: Dict[str, Any]) -> str:
     return parseaddr(draft_details.get("from", ""))[1].strip().lower()
 
 
+def _draft_html_body(draft_details: Dict[str, Any]) -> str:
+    return str(draft_details.get("html_body", "") or "").strip()
+
+
+def _draft_plain_body(draft_details: Dict[str, Any]) -> str:
+    return str(draft_details.get("plain_body", "") or "").strip()
+
+
+def _is_stale_gmail_draft_error(exc: Exception) -> bool:
+    if not isinstance(exc, HttpError):
+        return False
+    status = getattr(exc.resp, "status", None)
+    message = str(exc).lower()
+    return status == 404 or "notfound" in message or "not found" in message
+
+
 def _draft_send_block_reasons(lead: Dict[str, Any], draft_details: Dict[str, Any]) -> List[str]:
     reasons: List[str] = []
     verified_send_as_email = _verified_send_as_email()
@@ -337,10 +354,12 @@ def _draft_send_block_reasons(lead: Dict[str, Any], draft_details: Dict[str, Any
         reasons.append(f"draft recipient does not match Notion Email ({lead_email or '<empty>'})")
 
     subject = draft_details.get("subject", "").strip()
+    html_body = _draft_html_body(draft_details)
+    plain_body = _draft_plain_body(draft_details)
     body = draft_details.get("body", "").strip()
     if not subject:
         reasons.append("draft subject is missing")
-    if not body:
+    if not html_body and not plain_body and not body:
         reasons.append("draft body is missing")
 
     from_email = _draft_from_email(draft_details)
@@ -355,6 +374,13 @@ def _draft_send_block_reasons(lead: Dict[str, Any], draft_details: Dict[str, Any
         reasons.append(str(exc))
 
     return reasons
+
+
+def _skip_stale_draft(summary: Dict[str, int], skip_reasons: Dict[str, int], lead_name: str, draft_id: str, exc: Exception) -> None:
+    summary["skipped"] += 1
+    summary["stale_gmail_draft_id"] += 1
+    skip_reasons["stale_gmail_draft_id"] = skip_reasons.get("stale_gmail_draft_id", 0) + 1
+    print(f"SKIP | {lead_name} | Gmail Draft ID: {draft_id} | Reasons: stale_gmail_draft_id ({exc})")
 
 
 def _property_update(property_type: str, value: Any) -> Optional[Dict[str, Any]]:
@@ -490,6 +516,7 @@ def main() -> None:
         "notion_updated": 0,
         "notion_update_failed": 0,
         "skipped": 0,
+        "stale_gmail_draft_id": 0,
         "errors": 0,
     }
     skip_reasons: Dict[str, int] = {}
@@ -531,6 +558,9 @@ def main() -> None:
                 )
                 continue
         except Exception as exc:
+            if _is_stale_gmail_draft_error(exc):
+                _skip_stale_draft(summary, skip_reasons, lead_name, draft_id, exc)
+                continue
             summary["errors"] += 1
             print(f"ERROR | {lead_name} | Gmail Draft ID: {draft_id or '<missing>'} | {exc}")
             continue
@@ -553,6 +583,12 @@ def main() -> None:
             f"WOULD SEND | {lead_name} | draft {draft_id} | to {draft_details.get('to', '<none>')} | "
             f"subject {draft_details.get('subject', '<no subject>')}"
         )
+        html_body = _draft_html_body(draft_details)
+        plain_body = _draft_plain_body(draft_details)
+        if html_body:
+            print(f"- html body chars: {len(html_body)}")
+        if plain_body:
+            print(f"- plain body chars: {len(plain_body)}")
 
     verified_send_as_email = _verified_send_as_email()
     if SEND_DRY_RUN or not SEND_APPROVED_DRAFTS or not verified_send_as_email:
@@ -579,6 +615,9 @@ def main() -> None:
                 summary["notion_updated"] += 1
             summary["sent"] += 1
         except Exception as exc:
+            if _is_stale_gmail_draft_error(exc):
+                _skip_stale_draft(summary, skip_reasons, lead_name, draft_id, exc)
+                continue
             summary["errors"] += 1
             print(f"FAIL | send | {lead_name} | draft {draft_id} | {exc}")
 

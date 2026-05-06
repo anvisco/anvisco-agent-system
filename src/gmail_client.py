@@ -184,18 +184,81 @@ def get_draft(draft_id: str) -> Dict[str, Any]:
     return get_gmail_service().users().drafts().get(userId="me", id=draft_id, format="full").execute()
 
 
+def _decode_message_data(data: str) -> str:
+    if not data:
+        return ""
+    padded = data + "=" * (-len(data) % 4)
+    try:
+        return base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _extract_message_text(payload: Dict[str, Any]) -> str:
+    if not payload:
+        return ""
+    mime_type = str(payload.get("mimeType", "") or "").lower()
+    body = payload.get("body", {}) or {}
+    if mime_type in {"text/html", "text/plain"}:
+        data = body.get("data", "")
+        if data:
+            return _decode_message_data(data)
+    for part in payload.get("parts", []) or []:
+        text = _extract_message_text(part)
+        if text:
+            return text
+    data = body.get("data", "")
+    if data:
+        return _decode_message_data(data)
+    return ""
+
+
+def _extract_html_and_plain_body(payload: Dict[str, Any]) -> tuple[str, str]:
+    html_body = ""
+    plain_body = ""
+    if not payload:
+        return html_body, plain_body
+
+    mime_type = str(payload.get("mimeType", "") or "").lower()
+    body = payload.get("body", {}) or {}
+    data = body.get("data", "")
+    if mime_type == "text/html" and data:
+        html_body = _decode_message_data(data)
+    elif mime_type == "text/plain" and data:
+        plain_body = _decode_message_data(data)
+
+    for part in payload.get("parts", []) or []:
+        part_html, part_plain = _extract_html_and_plain_body(part)
+        if part_html and not html_body:
+            html_body = part_html
+        if part_plain and not plain_body:
+            plain_body = part_plain
+        if html_body and plain_body:
+            break
+
+    if not html_body and mime_type == "text/html" and data:
+        html_body = _decode_message_data(data)
+    if not plain_body and mime_type == "text/plain" and data:
+        plain_body = _decode_message_data(data)
+    return html_body, plain_body
+
+
 def extract_draft_details(draft: Dict[str, Any]) -> Dict[str, Any]:
     message = draft.get("message", {}) or {}
     payload = message.get("payload", {}) or {}
+    html_body, plain_body = _extract_html_and_plain_body(payload)
+    extracted_body = html_body or plain_body or _extract_message_text(payload)
     return {
         "draft_id": str(draft.get("id", "") or "").strip(),
         "thread_id": str(message.get("threadId", "") or "").strip(),
         "to": _header_from_payload(payload, "To"),
+        "from": _header_from_payload(payload, "From"),
         "cc": _header_from_payload(payload, "Cc"),
         "bcc": _header_from_payload(payload, "Bcc"),
         "subject": _header_from_payload(payload, "Subject"),
-        "from": _header_from_payload(payload, "From"),
-        "body": _extract_message_text(payload),
+        "html_body": html_body,
+        "plain_body": plain_body,
+        "body": extracted_body,
     }
 
 
