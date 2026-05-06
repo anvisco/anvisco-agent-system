@@ -511,14 +511,15 @@ def _update_notion_ids(lead: Dict[str, Any], draft_id: str, thread_id: str) -> N
     get_client().pages.update(page_id=lead["id"], properties=updates)
 
 
-def _update_notion_redraft_marker(lead: Dict[str, Any], regenerated: Dict[str, str]) -> None:
+def _update_notion_redraft_marker(lead: Dict[str, Any], regenerated: Dict[str, str]) -> bool:
     updates = _build_redraft_marker_updates(lead, regenerated)
     if not updates:
-        return
+        return False
     if REDRAFT_DRY_RUN:
         print(f"DRY RUN: would mark {_lead_business_name(lead)} as redrafted -> {list(updates.keys())}")
-        return
+        return True
     get_client().pages.update(page_id=lead["id"], properties=updates)
+    return True
 
 
 def _service_summary_for_redraft(lead: Dict[str, Any]) -> str:
@@ -679,35 +680,55 @@ def main() -> None:
 
     gmail_drafts = [_expand_draft(draft) for draft in list_drafts()]
     total_found = len(gmail_drafts)
-    selected: List[Dict[str, Any]] = []
+    selected: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
     diagnostics: List[str] = []
-    for draft in gmail_drafts:
-        candidate, reason = _draft_candidate_reason(draft, indexes)
-        recipients = _split_emails(_draft_to_header(draft))
-        recipient_in_notion = _recipient_in_notion(recipients, indexes)
-        if len(diagnostics) < 10:
-            diagnostics.append(
-                f"- recipients: {', '.join(recipients) or '<none>'}; in Notion: {'yes' if recipient_in_notion else 'no'}; "
-                f"candidate: {'yes' if candidate else 'no'}; reason: {reason}"
-            )
-        if candidate:
-            selected.append(draft)
-
-    selected = selected[:MAX_REDRAFTS_PER_RUN]
-
     summary = {
         "drafts_found": total_found,
-        "candidate_drafts": len(selected),
+        "candidate_drafts": 0,
         "selected": 0,
         "skipped_no_match": 0,
         "skipped_unsafe_status": 0,
         "skipped_already_redrafted": 0,
         "skipped_reason": 0,
         "updated": 0,
+        "redraft_markers_written": 0,
         "failed_validation": 0,
         "failed_gmail_update": 0,
         "notion_id_updates": 0,
     }
+    for draft in gmail_drafts:
+        candidate, reason = _draft_candidate_reason(draft, indexes)
+        recipients = _split_emails(_draft_to_header(draft))
+        recipient_in_notion = _recipient_in_notion(recipients, indexes)
+        lead, lead_reason = _choose_lead_for_draft(draft, indexes) if candidate else (None, "")
+        if len(diagnostics) < 10:
+            diagnostics.append(
+                f"- recipients: {', '.join(recipients) or '<none>'}; in Notion: {'yes' if recipient_in_notion else 'no'}; "
+                f"candidate: {'yes' if candidate else 'no'}; reason: {reason}"
+            )
+        if candidate:
+            if not lead:
+                summary["skipped_no_match"] += 1
+                print(
+                    f"SKIP | no match | draft {_draft_id(draft) or '<no id>'} | "
+                    f"to {_draft_to_header(draft) or '<none>'} | subject {_draft_subject(draft) or '<no subject>'} | "
+                    f"recipient in Notion: {'yes' if recipient_in_notion else 'no'} | {lead_reason or reason}"
+                )
+                continue
+            if not FORCE_REDRAFT:
+                already_redrafted, redraft_reason = _lead_has_redraft_marker(lead)
+                if already_redrafted:
+                    summary["skipped_already_redrafted"] += 1
+                    summary["skipped_reason"] += 1
+                    print(
+                        f"SKIP | already redrafted | {_lead_business_name(lead)} | "
+                        f"{redraft_reason or 'redraft marker present'} | draft {_draft_id(draft) or '<no id>'}"
+                    )
+                    continue
+            selected.append((draft, lead))
+
+    selected = selected[:MAX_REDRAFTS_PER_RUN]
+    summary["candidate_drafts"] = len(selected)
 
     print("Redraft run summary:")
     print(f"- dry run: {'yes' if REDRAFT_DRY_RUN else 'no'}")
@@ -719,7 +740,7 @@ def main() -> None:
     for line in diagnostics:
         print(line)
 
-    for draft in selected:
+    for draft, lead in selected:
         draft_id = _draft_id(draft)
         thread_id = _draft_thread_id(draft)
         subject = _draft_subject(draft)
@@ -728,12 +749,6 @@ def main() -> None:
         bcc_header = _draft_bcc_header(draft)
         in_reply_to = _draft_in_reply_to(draft)
         references = _draft_references(draft)
-
-        lead, match_status = _choose_lead_for_draft(draft, indexes)
-        if not lead:
-            summary["skipped_no_match"] += 1
-            print(f"SKIP | no match | {draft_id} | {subject or '<no subject>'} | {match_status}")
-            continue
 
         safe_reasons = _lead_safe_for_redraft(lead)
         if safe_reasons:
@@ -809,7 +824,8 @@ def main() -> None:
             updated_thread_id = str(updated_message.get("threadId", "") or thread_id or "").strip()
             if draft_id or updated_thread_id:
                 _update_notion_ids(lead, draft_id, updated_thread_id)
-            _update_notion_redraft_marker(lead, regenerated)
+            if _update_notion_redraft_marker(lead, regenerated):
+                summary["redraft_markers_written"] += 1
         except Exception as exc:
             summary["failed_gmail_update"] += 1
             print(f"FAIL | gmail update | {_lead_business_name(lead)} | draft {draft_id or '<no id>'} | {exc}")
