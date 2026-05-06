@@ -179,6 +179,14 @@ Legacy compatibility fields:
 - `Sequence Step`: legacy sequence marker used by older flows.
 - `Last Email Sent At`: legacy date field accepted by some scripts.
 
+## 15b. Ops Status Overlay
+
+- `Ops Status` is the operational classifier output used to route a record to the next human or automated step.
+- `Blocker Reason` stores the machine-readable blocker codes that explain why a record is not ready.
+- Treat `Ops Status` as an overlay on top of the canonical Notion fields, not a replacement for them.
+- The ops classifier is dry-run by default and should only update these fields after you review the preview output.
+- Do not use `Ops Status` to overwrite `Lead Status`, `CASL Basis`, `Gmail Sent Status`, or `Gmail Match Status`.
+
 ## 16. Gmail Label Behavior
 
 - Sent messages get the `Anvis/Leads` label after send.
