@@ -680,6 +680,8 @@ def _build_empty_filter(property_name: str, property_type: str) -> Optional[Dict
 def _property_update(property_type: str, value: Any) -> Optional[Dict[str, Any]]:
     if value is None:
         return None
+    if isinstance(value, str) and not value.strip():
+        return None
     if property_type == "rich_text":
         return {"rich_text": [{"type": "text", "text": {"content": str(value)}}]}
     if property_type == "title":
