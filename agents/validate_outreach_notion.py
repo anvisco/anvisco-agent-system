@@ -16,10 +16,10 @@ REQUIRED_FOR_DRAFT = (
     "Business Name",
     "Website",
     "Email",
-    "Top 3 Issues",
-    "Email Angle",
     "Angle Bucket",
 )
+TOP_ISSUE_CANDIDATES = ("Top 3 Issues", "Top Issue")
+EMAIL_ANGLE_CANDIDATES = ("Email Angle", "Outreach Angle")
 DUPLICATE_KEYS = ("Domain", "Email", "Phone")
 LEAD_STATUS_CANDIDATES = ("Lead Status", "Outreach Status")
 AUDIT_STATUS_CANDIDATES = ("Audit Status",)
@@ -58,6 +58,13 @@ def _text(prop: Dict[str, Any]) -> str:
 def _first_existing(properties: Dict[str, Any], candidates: tuple[str, ...]) -> Optional[str]:
     for candidate in candidates:
         if candidate in properties:
+            return candidate
+    return None
+
+
+def _first_existing_schema_field(schema_properties: Dict[str, Any], candidates: tuple[str, ...]) -> Optional[str]:
+    for candidate in candidates:
+        if candidate in schema_properties:
             return candidate
     return None
 
@@ -124,6 +131,10 @@ def main() -> None:
     missing_schema_fields = [field for field in REQUIRED_FOR_DRAFT if field not in schema_properties and field != "Business Name"]
     if "Business Name" not in schema_properties and title_property not in schema_properties:
         missing_schema_fields.append("Business Name")
+    if not _first_existing_schema_field(schema_properties, TOP_ISSUE_CANDIDATES):
+        missing_schema_fields.append("Top 3 Issues")
+    if not _first_existing_schema_field(schema_properties, EMAIL_ANGLE_CANDIDATES):
+        missing_schema_fields.append("Email Angle")
     if missing_schema_fields:
         print(f"Missing schema fields: {', '.join(missing_schema_fields)}")
 
@@ -141,6 +152,10 @@ def main() -> None:
         new_lead_count += 1
         name = _field_value(page, "Business Name", title_property) or page["id"]
         missing = [field for field in REQUIRED_FOR_DRAFT if not _field_value(page, field, title_property)]
+        if not any(_field_value(page, field, title_property) for field in TOP_ISSUE_CANDIDATES):
+            missing.append("Top 3 Issues")
+        if not any(_field_value(page, field, title_property) for field in EMAIL_ANGLE_CANDIDATES):
+            missing.append("Email Angle")
         if _score(page) < 3:
             missing.append("Lead Quality Score >= 3")
         if missing:
