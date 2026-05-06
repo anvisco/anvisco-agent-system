@@ -319,6 +319,30 @@ def _service_search_label(lead: Dict[str, Any]) -> str:
     return "dental"
 
 
+def _service_search_phrase(lead: Dict[str, Any]) -> str:
+    label = _service_search_label(lead)
+    if label == "Invisalign":
+        return "Invisalign dentist"
+    if label == "emergency":
+        return "emergency dentist"
+    if label == "implant":
+        return "implant dentist"
+    if label == "orthodontic":
+        return "orthodontic provider"
+    if label == "multi-service":
+        return "family dentist"
+    return "dental clinic"
+
+
+def _indefinite_article(phrase: str) -> str:
+    normalized = phrase.strip().lower()
+    if not normalized:
+        return "a"
+    if normalized.startswith(("honest", "hour", "heir", "honor", "invisalign", "emergency", "implant", "orthodontic", "a", "e", "i", "o", "u")):
+        return "an"
+    return "a"
+
+
 def _clinic_strength_fragments(lead: Dict[str, Any]) -> List[str]:
     strengths: List[str] = []
     seen: set[str] = set()
@@ -488,9 +512,10 @@ def _build_first_email_body(lead: Dict[str, Any], strengths: List[str], business
     if search_sentence.startswith(("For patients comparing clinics", "For patients comparing dentists")):
         search_sentence = ""
     if not search_sentence and city:
-        service_focus = _service_search_label(lead)
+        service_focus = _service_search_phrase(lead)
+        article = _indefinite_article(service_focus)
         search_sentence = (
-            f"It also matters for how people search now. When someone asks Google, Maps, or AI tools for a {service_focus} dentist or {city} dental clinic, "
+            f"It also matters for how people search now. When someone asks Google, Maps, or AI tools for {article} {service_focus} or a {city} dental clinic, "
             "the clinic with the clearest service structure and trust signals has the advantage."
         )
     search_sentence = escape(search_sentence)
