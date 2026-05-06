@@ -303,6 +303,22 @@ def _service_summary(lead: Dict[str, Any]) -> str:
     return ", ".join(grouped[:-1]) + f", and {grouped[-1]}"
 
 
+def _service_search_label(lead: Dict[str, Any]) -> str:
+    services = _lead_services(lead)
+    lowered = [service.lower() for service in services]
+    if any("invisalign" in service for service in lowered):
+        return "Invisalign"
+    if any("emergency" in service for service in lowered):
+        return "emergency"
+    if any("implant" in service for service in lowered):
+        return "implant"
+    if any("orthodontic" in service for service in lowered):
+        return "orthodontic"
+    if services:
+        return "multi-service"
+    return "dental"
+
+
 def _clinic_strength_fragments(lead: Dict[str, Any]) -> List[str]:
     strengths: List[str] = []
     seen: set[str] = set()
@@ -460,6 +476,7 @@ def _build_first_email_body(lead: Dict[str, Any], strengths: List[str], business
 
     if city:
         issue_sentence = (
+            f"The gap I noticed is that these strengths could be easier to scan and act on. "
             f"For patients comparing dentists in {city}, unclear service paths or booking steps can cost attention before someone ever books."
         )
     elif business_impact:
@@ -468,14 +485,12 @@ def _build_first_email_body(lead: Dict[str, Any], strengths: List[str], business
         issue_sentence = "The gap I noticed is that these strengths could be easier to scan and act on."
 
     search_sentence = email_angle or ""
+    if search_sentence.startswith(("For patients comparing clinics", "For patients comparing dentists")):
+        search_sentence = ""
     if not search_sentence and city:
+        service_focus = _service_search_label(lead)
         search_sentence = (
-            f"It also matters for how people search now. When someone asks Google, Maps, or AI tools for a dentist in {city}, "
-            "the clinic with the clearest service structure and trust signals has the advantage."
-        )
-    elif not search_sentence:
-        search_sentence = (
-            "It also matters for how people search now. When someone asks Google, Maps, or AI tools for a dental clinic, "
+            f"It also matters for how people search now. When someone asks Google, Maps, or AI tools for a {service_focus} dentist or {city} dental clinic, "
             "the clinic with the clearest service structure and trust signals has the advantage."
         )
     search_sentence = escape(search_sentence)
