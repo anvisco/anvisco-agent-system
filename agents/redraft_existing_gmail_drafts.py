@@ -5,6 +5,7 @@ import re
 import sys
 from html import escape
 from email.utils import getaddresses, parseaddr
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -39,6 +40,7 @@ def _max_redrafts_per_run() -> int:
 
 MAX_REDRAFTS_PER_RUN = _max_redrafts_per_run()
 REDRAFT_DRY_RUN = os.getenv("REDRAFT_DRY_RUN", "true").strip().lower() in {"1", "true", "yes", "on"}
+FORCE_REDRAFT = os.getenv("FORCE_REDRAFT", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 OUTREACH_MARKERS = (
     "free website audit",
@@ -58,6 +60,9 @@ BUSINESS_NAME_PATTERNS = (
 BLOCKED_LEAD_STATUSES = {"not_fit", "archived", "paid_client"}
 BLOCKED_DUPLICATE_STATUSES = {"duplicate", "possible_duplicate", "already_contacted", "do_not_contact"}
 BLOCKED_GMAIL_MATCH_STATUSES = {"sent_exists", "replied"}
+REDRAFT_MARKER_FIELDS = ("Last Redrafted At", "Redraft Status", "Email Redraft Status", "Notes", "Scrape Notes")
+REDRAFT_STATUS_VALUES = {"redrafted", "redraft_complete", "completed", "done"}
+REDRAFT_NOTE_MARKER_PREFIX = "Redrafted At:"
 SERVICE_PHRASE_MAP = {
     "cleaning": "family, cosmetic, and denture care",
     "cosmetic": "family, cosmetic, and denture care",
@@ -264,6 +269,91 @@ def _lead_safe_for_redraft(lead: Dict[str, Any]) -> List[str]:
     return reasons
 
 
+def _lead_redraft_marker_field(lead: Dict[str, Any]) -> str:
+    properties = lead.get("properties", {})
+    for field_name in REDRAFT_MARKER_FIELDS:
+        if field_name in properties:
+            return field_name
+    return ""
+
+
+def _lead_has_redraft_marker(lead: Dict[str, Any]) -> Tuple[bool, str]:
+    properties = lead.get("properties", {})
+    field_name = _lead_redraft_marker_field(lead)
+    if not field_name:
+        return False, ""
+    value = properties.get(field_name, {})
+    text = _normalize_text(draft_flow._get_text_value(value))  # type: ignore[attr-defined]
+    prop_type = value.get("type")
+
+    if field_name == "Last Redrafted At":
+        return bool(text), "Last Redrafted At is set" if text else ""
+    if field_name in {"Redraft Status", "Email Redraft Status"}:
+        if text in REDRAFT_STATUS_VALUES or text == "redrafted":
+            return True, f"{field_name} is {text}"
+        return bool(text), f"{field_name} is set" if text else ""
+    if field_name in {"Notes", "Scrape Notes"}:
+        if REDRAFT_NOTE_MARKER_PREFIX.lower() in text or "redraft status: redrafted" in text:
+            return True, f"{field_name} already contains redraft marker"
+        return False, ""
+    if prop_type in {"date", "status", "select", "rich_text", "title"} and text:
+        return True, f"{field_name} is set"
+    return False, ""
+
+
+def _draft_current_copy_matches(draft: Dict[str, Any], subject: str, body: str) -> bool:
+    return _draft_subject(draft) == subject and _draft_body_text(draft) == body
+
+
+def _email_1_current_copy_matches(lead: Dict[str, Any], subject: str, body: str) -> bool:
+    properties = lead.get("properties", {})
+    subject_property = draft_flow._first_existing_property_name(  # type: ignore[attr-defined]
+        properties,
+        draft_flow.EMAIL_1_SUBJECT_CANDIDATES,  # type: ignore[attr-defined]
+    )
+    body_property = draft_flow._first_existing_property_name(  # type: ignore[attr-defined]
+        properties,
+        draft_flow.EMAIL_1_DRAFT_CANDIDATES,  # type: ignore[attr-defined]
+    )
+    existing_subject = draft_flow._get_text_value(draft_flow._get_property(lead, subject_property or ""))  # type: ignore[attr-defined]
+    existing_body = draft_flow._get_text_value(draft_flow._get_property(lead, body_property or ""))  # type: ignore[attr-defined]
+    return bool(subject_property and body_property and existing_subject == subject and existing_body == body)
+
+
+def _build_redraft_marker_updates(lead: Dict[str, Any], regenerated: Dict[str, str]) -> Dict[str, Any]:
+    properties = lead.get("properties", {})
+    marker_field = _lead_redraft_marker_field(lead)
+    if not marker_field:
+        return {}
+
+    marker_timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    marker_text = f"{REDRAFT_NOTE_MARKER_PREFIX} {marker_timestamp}"
+    prop_type = properties.get(marker_field, {}).get("type")
+
+    if marker_field == "Last Redrafted At":
+        return {marker_field: {"date": {"start": marker_timestamp}}}
+    if marker_field in {"Redraft Status", "Email Redraft Status"}:
+        if prop_type == "status":
+            return {marker_field: {"status": {"name": "redrafted"}}}
+        if prop_type == "select":
+            return {marker_field: {"select": {"name": "redrafted"}}}
+        if prop_type == "rich_text":
+            return {marker_field: {"rich_text": [{"type": "text", "text": {"content": "redrafted"}}]}}
+        if prop_type == "title":
+            return {marker_field: {"title": [{"type": "text", "text": {"content": "redrafted"}}]}}
+        return {}
+    if marker_field in {"Notes", "Scrape Notes"}:
+        existing = draft_flow._get_text_value(draft_flow._get_property(lead, marker_field))  # type: ignore[attr-defined]
+        if REDRAFT_NOTE_MARKER_PREFIX.lower() in _normalize_text(existing):
+            return {}
+        combined = f"{existing}\n{marker_text}".strip() if existing else marker_text
+        if prop_type == "rich_text":
+            return {marker_field: {"rich_text": [{"type": "text", "text": {"content": combined}}]}}
+        if prop_type == "title":
+            return {marker_field: {"title": [{"type": "text", "text": {"content": combined}}]}}
+    return {}
+
+
 def _build_notion_indexes(leads: List[Dict[str, Any]]) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
     indexes = {
         "email": {},
@@ -417,6 +507,16 @@ def _update_notion_ids(lead: Dict[str, Any], draft_id: str, thread_id: str) -> N
         return
     if REDRAFT_DRY_RUN:
         print(f"DRY RUN: would update Notion IDs for {_lead_business_name(lead)} -> {list(updates.keys())}")
+        return
+    get_client().pages.update(page_id=lead["id"], properties=updates)
+
+
+def _update_notion_redraft_marker(lead: Dict[str, Any], regenerated: Dict[str, str]) -> None:
+    updates = _build_redraft_marker_updates(lead, regenerated)
+    if not updates:
+        return
+    if REDRAFT_DRY_RUN:
+        print(f"DRY RUN: would mark {_lead_business_name(lead)} as redrafted -> {list(updates.keys())}")
         return
     get_client().pages.update(page_id=lead["id"], properties=updates)
 
@@ -598,9 +698,11 @@ def main() -> None:
     summary = {
         "drafts_found": total_found,
         "candidate_drafts": len(selected),
-        "matched": 0,
+        "selected": 0,
         "skipped_no_match": 0,
         "skipped_unsafe_status": 0,
+        "skipped_already_redrafted": 0,
+        "skipped_reason": 0,
         "updated": 0,
         "failed_validation": 0,
         "failed_gmail_update": 0,
@@ -610,6 +712,7 @@ def main() -> None:
     print("Redraft run summary:")
     print(f"- dry run: {'yes' if REDRAFT_DRY_RUN else 'no'}")
     print(f"- max redrafts per run: {MAX_REDRAFTS_PER_RUN}")
+    print(f"- force redraft: {'yes' if FORCE_REDRAFT else 'no'}")
     print(f"- Gmail drafts found: {total_found}")
     print(f"- candidate drafts selected: {len(selected)}")
     print("First 10 draft recipient diagnostics:")
@@ -648,7 +751,24 @@ def main() -> None:
             print(f"FAIL | validation | {_lead_business_name(lead)} | draft {draft_id or '<no id>'} | {exc}")
             continue
 
-        summary["matched"] += 1
+        already_redrafted, redraft_reason = _lead_has_redraft_marker(lead)
+        if not already_redrafted and _draft_current_copy_matches(draft, regenerated["subject"], regenerated["body"]):
+            already_redrafted = True
+            redraft_reason = "Gmail draft already matches current generator output"
+        if not FORCE_REDRAFT and not already_redrafted and _email_1_current_copy_matches(lead, regenerated["subject"], regenerated["body"]):
+            already_redrafted = True
+            redraft_reason = "Email 1 subject/body already match current generator output"
+
+        if already_redrafted and not FORCE_REDRAFT:
+            summary["skipped_already_redrafted"] += 1
+            summary["skipped_reason"] += 1
+            print(
+                f"SKIP | already redrafted | {_lead_business_name(lead)} | "
+                f"{redraft_reason or 'redraft marker present'} | draft {draft_id or '<no id>'}"
+            )
+            continue
+
+        summary["selected"] += 1
         lead_name = _lead_business_name(lead)
         print(
             f"MATCHED | {lead_name} | draft {draft_id or '<no id>'} | "
@@ -664,6 +784,9 @@ def main() -> None:
             if id_updates:
                 print(f"- DRY RUN: would update Notion IDs: {', '.join(id_updates.keys())}")
                 summary["notion_id_updates"] += 1
+            marker_updates = _build_redraft_marker_updates(lead, regenerated)
+            if marker_updates:
+                print(f"- DRY RUN: would mark redrafted: {', '.join(marker_updates.keys())}")
             continue
 
         try:
@@ -686,6 +809,7 @@ def main() -> None:
             updated_thread_id = str(updated_message.get("threadId", "") or thread_id or "").strip()
             if draft_id or updated_thread_id:
                 _update_notion_ids(lead, draft_id, updated_thread_id)
+            _update_notion_redraft_marker(lead, regenerated)
         except Exception as exc:
             summary["failed_gmail_update"] += 1
             print(f"FAIL | gmail update | {_lead_business_name(lead)} | draft {draft_id or '<no id>'} | {exc}")
