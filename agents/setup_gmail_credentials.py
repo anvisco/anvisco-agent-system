@@ -11,13 +11,11 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 
+from src.gmail_client import SCOPES
+
 
 CLIENT_TYPES = ("installed", "web")
 REQUIRED_CLIENT_KEYS = {"client_id", "client_secret", "auth_uri", "token_uri"}
-GMAIL_SCOPES = [
-    "https://www.googleapis.com/auth/gmail.compose",
-    "https://www.googleapis.com/auth/gmail.readonly",
-]
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DOWNLOADS_DIR = Path.home() / "Downloads"
 TARGET_DIR = PROJECT_ROOT / "credentials"
@@ -166,7 +164,7 @@ def authenticate_gmail() -> bool:
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     flow = InstalledAppFlow.from_client_secrets_file(
         str(TARGET_FILE),
-        scopes=GMAIL_SCOPES,
+        scopes=SCOPES,
     )
     print("Opening browser for Gmail authentication...")
     creds = flow.run_local_server(port=0, open_browser=True)
@@ -176,7 +174,14 @@ def authenticate_gmail() -> bool:
     return True
 
 
+def print_scope_migration_notice() -> None:
+    print("Gmail OAuth scopes changed.")
+    print("Delete credentials/gmail_token.json and re-authenticate so the new scopes are granted.")
+
+
 def main() -> None:
+    print_scope_migration_notice()
+
     if TOKEN_FILE.exists():
         print("Token already exists")
         return

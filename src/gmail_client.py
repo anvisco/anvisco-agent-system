@@ -18,13 +18,16 @@ from googleapiclient.discovery import build
 from src.config import settings
 
 
-GMAIL_SCOPES = [
+SCOPES = [
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.settings.basic",
     "https://www.googleapis.com/auth/gmail.modify",
 ]
+
+# Backward-compatible alias for older imports.
+GMAIL_SCOPES = SCOPES
 
 
 def _save_token(creds: Credentials) -> None:
@@ -45,12 +48,12 @@ def get_gmail_credentials() -> Credentials:
             token_uri="https://oauth2.googleapis.com/token",
             client_id=settings.gmail_client_id,
             client_secret=settings.gmail_client_secret,
-            scopes=GMAIL_SCOPES,
+            scopes=SCOPES,
         )
 
     if settings.gmail_token_path:
         try:
-            creds = Credentials.from_authorized_user_file(settings.gmail_token_path, GMAIL_SCOPES)
+            creds = Credentials.from_authorized_user_file(settings.gmail_token_path, SCOPES)
         except FileNotFoundError:
             pass
 
@@ -74,7 +77,7 @@ def get_gmail_credentials() -> Credentials:
                 "Download OAuth Desktop credentials from Google Cloud, rename the file to gmail_credentials.json, "
                 "and place it in the credentials/ folder."
             )
-        flow = InstalledAppFlow.from_client_secrets_file(str(credentials_path), GMAIL_SCOPES)
+        flow = InstalledAppFlow.from_client_secrets_file(str(credentials_path), SCOPES)
         print("Opening browser for Gmail authorization...")
         print("If the browser does not open, use the authorization URL printed below and paste it manually.")
         print("Waiting for authorization callback...")
