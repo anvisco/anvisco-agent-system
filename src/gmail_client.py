@@ -243,14 +243,22 @@ def _extract_html_and_plain_body(payload: Dict[str, Any]) -> tuple[str, str]:
     return html_body, plain_body
 
 
+def _message_label_ids(message: Dict[str, Any]) -> list[str]:
+    label_ids = message.get("labelIds", []) or []
+    return [str(label).strip() for label in label_ids if str(label).strip()]
+
+
 def extract_draft_details(draft: Dict[str, Any]) -> Dict[str, Any]:
     message = draft.get("message", {}) or {}
     payload = message.get("payload", {}) or {}
     html_body, plain_body = _extract_html_and_plain_body(payload)
     extracted_body = html_body or plain_body or _extract_message_text(payload)
+    label_ids = _message_label_ids(message)
     return {
         "draft_id": str(draft.get("id", "") or "").strip(),
+        "message_id": str(message.get("id", "") or "").strip(),
         "thread_id": str(message.get("threadId", "") or "").strip(),
+        "label_ids": label_ids,
         "to": _header_from_payload(payload, "To"),
         "from": _header_from_payload(payload, "From"),
         "cc": _header_from_payload(payload, "Cc"),

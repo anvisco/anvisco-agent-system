@@ -335,12 +335,37 @@ def _draft_plain_body(draft_details: Dict[str, Any]) -> str:
     return str(draft_details.get("plain_body", "") or "").strip()
 
 
+def _draft_message_id(draft_details: Dict[str, Any]) -> str:
+    return str(draft_details.get("message_id", "") or "").strip()
+
+
+def _draft_label_ids(draft_details: Dict[str, Any]) -> List[str]:
+    labels = draft_details.get("label_ids", []) or []
+    return [str(label).strip().upper() for label in labels if str(label).strip()]
+
+
 def _is_stale_gmail_draft_error(exc: Exception) -> bool:
     if not isinstance(exc, HttpError):
         return False
     status = getattr(exc.resp, "status", None)
     message = str(exc).lower()
     return status == 404 or "notfound" in message or "not found" in message
+
+
+def _active_draft_block_reason(stored_draft_id: str, draft_details: Dict[str, Any]) -> Optional[str]:
+    resolved_draft_id = draft_details.get("draft_id", "").strip()
+    message_id = _draft_message_id(draft_details)
+    label_ids = _draft_label_ids(draft_details)
+
+    if not resolved_draft_id:
+        return "not_active_draft"
+    if stored_draft_id.strip() and resolved_draft_id != stored_draft_id.strip():
+        return "not_active_draft"
+    if not message_id:
+        return "not_active_draft"
+    if not label_ids or "DRAFT" not in label_ids:
+        return "not_active_draft"
+    return None
 
 
 def _draft_send_block_reasons(lead: Dict[str, Any], draft_details: Dict[str, Any]) -> List[str]:
@@ -381,6 +406,13 @@ def _skip_stale_draft(summary: Dict[str, int], skip_reasons: Dict[str, int], lea
     summary["stale_gmail_draft_id"] += 1
     skip_reasons["stale_gmail_draft_id"] = skip_reasons.get("stale_gmail_draft_id", 0) + 1
     print(f"SKIP | {lead_name} | Gmail Draft ID: {draft_id} | Reasons: stale_gmail_draft_id ({exc})")
+
+
+def _skip_not_active_draft(summary: Dict[str, int], skip_reasons: Dict[str, int], lead_name: str, draft_id: str, reason: str) -> None:
+    summary["skipped"] += 1
+    summary["not_active_draft"] += 1
+    skip_reasons["not_active_draft"] = skip_reasons.get("not_active_draft", 0) + 1
+    print(f"SKIP | {lead_name} | Gmail Draft ID: {draft_id} | Reasons: not_active_draft ({reason})")
 
 
 def _property_update(property_type: str, value: Any) -> Optional[Dict[str, Any]]:
@@ -510,6 +542,7 @@ def main() -> None:
         "eligible_records": 0,
         "approved_by_admin": 0,
         "approved_by_rules": 0,
+        "active_drafts_selected": 0,
         "selected": 0,
         "would_send": 0,
         "sent": 0,
@@ -517,6 +550,7 @@ def main() -> None:
         "notion_update_failed": 0,
         "skipped": 0,
         "stale_gmail_draft_id": 0,
+        "not_active_draft": 0,
         "errors": 0,
     }
     skip_reasons: Dict[str, int] = {}
@@ -547,6 +581,10 @@ def main() -> None:
         try:
             draft = get_draft(draft_id)
             draft_details = extract_draft_details(draft)
+            active_block_reason = _active_draft_block_reason(draft_id, draft_details)
+            if active_block_reason:
+                _skip_not_active_draft(summary, skip_reasons, lead_name, draft_id, active_block_reason)
+                continue
             draft_block_reasons = _draft_send_block_reasons(lead, draft_details)
             if draft_block_reasons:
                 summary["skipped"] += 1
@@ -568,6 +606,7 @@ def main() -> None:
         eligible.append((lead, draft, draft_details))
 
     summary["eligible_records"] = len(eligible)
+    summary["active_drafts_selected"] = len(eligible)
     selected = eligible[:MAX_SENDS_PER_RUN]
     summary["selected"] = len(selected)
     if SEND_DRY_RUN or not SEND_APPROVED_DRAFTS:
@@ -579,8 +618,9 @@ def main() -> None:
     for lead, draft, draft_details in selected:
         lead_name = _lead_name(lead)
         draft_id = draft_details["draft_id"] or _lead_gmail_draft_id(lead)
+        action = "WOULD SEND" if SEND_DRY_RUN or not SEND_APPROVED_DRAFTS else "SENDING"
         print(
-            f"WOULD SEND | {lead_name} | draft {draft_id} | to {draft_details.get('to', '<none>')} | "
+            f"{action} | {lead_name} | draft {draft_id} | to {draft_details.get('to', '<none>')} | "
             f"subject {draft_details.get('subject', '<no subject>')}"
         )
         html_body = _draft_html_body(draft_details)
@@ -604,7 +644,15 @@ def main() -> None:
     for lead, draft, draft_details in selected:
         lead_name = _lead_name(lead)
         draft_id = draft_details["draft_id"]
+        message_id = draft_details.get("message_id", "")
+        label_ids = ", ".join(draft_details.get("label_ids", [])) or "<none>"
         try:
+            active_block_reason = _active_draft_block_reason(draft_id, draft_details)
+            if active_block_reason:
+                _skip_not_active_draft(summary, skip_reasons, lead_name, draft_id, active_block_reason)
+                continue
+
+            print(f"SENDING | {lead_name} | draft {draft_id} | message {message_id or '<none>'} | labels {label_ids}")
             sent = send_draft(draft_id)
             sent_thread_id = str(sent.get("threadId", "") or sent.get("thread_id", "") or "").strip()
             print(f"SENT | {lead_name} | draft {draft_id} | thread {sent_thread_id or '<none>'}")
