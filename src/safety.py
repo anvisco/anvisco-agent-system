@@ -33,6 +33,16 @@ SECRET_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+INTERNAL_STRATEGY_RE = re.compile(
+    r"\b("
+    r"position the redesign|"
+    r"patient[- ]conversion system|"
+    r"turns more website visitors into consultations|"
+    r"redesign strategy|"
+    r"funnel system"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def _strip_allowed_references(text: str) -> str:
@@ -63,6 +73,8 @@ def prospect_copy_violations(*parts: str) -> List[str]:
         violations.append("backend-tool mention")
     if GUARANTEE_RE.search(sanitized):
         violations.append("guarantee claim")
+    if INTERNAL_STRATEGY_RE.search(sanitized):
+        violations.append("internal strategy wording")
     if SECRET_RE.search(sanitized):
         violations.append("secret-like token")
 

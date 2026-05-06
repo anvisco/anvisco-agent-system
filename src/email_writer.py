@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from html import escape
 from typing import Any, Dict, Iterable, List
 
@@ -19,13 +20,15 @@ EMAIL_3_SUBJECT = "Follow-up"
 FALLBACK_RECOMMENDED_OFFER = "Website improvements"
 FALLBACK_ANGLE_BUCKET = "visibility_trust_booking"
 SERVICE_PHRASE_MAP = {
-    "cleaning": "family, cosmetic, and denture care",
-    "cosmetic": "family, cosmetic, and denture care",
-    "denture": "family, cosmetic, and denture care",
+    "cleaning": "dental hygiene / cleaning",
+    "cosmetic": "cosmetic dentistry",
+    "denture": "denture care",
     "invisalign": "Invisalign care",
     "implant": "implant dentistry",
     "emergency": "emergency dental care",
+    "orthodont": "orthodontic care",
     "orthodontic": "orthodontic care",
+    "root canal": "root canal treatment",
 }
 COMMON_NAME_REPLACEMENTS = (
     (" Family and Cosmetic Dentistry", " Dentistry"),
@@ -110,6 +113,16 @@ def _split_fragments(text: str) -> List[str]:
     return pieces
 
 
+def _normalize_service_token(token: str) -> str:
+    cleaned = re.sub(r"[^\w\s/+-]", " ", token).strip().lower()
+    if not cleaned:
+        return ""
+    for key, phrase in SERVICE_PHRASE_MAP.items():
+        if key in cleaned:
+            return phrase
+    return " ".join(cleaned.split())
+
+
 def _dedupe_preserve_order(items: Iterable[str]) -> List[str]:
     seen: set[str] = set()
     ordered: List[str] = []
@@ -183,24 +196,10 @@ def _lead_province(lead: Dict[str, Any]) -> str:
 def _lead_services(lead: Dict[str, Any]) -> List[str]:
     raw_services = _split_fragments(_get_first_property_text(lead, SERVICE_FIELDS))
     mapped: List[str] = []
-    seen_clusters: set[str] = set()
     for service in raw_services:
-        normalized = service.strip()
-        if not normalized:
-            continue
-        mapped_service = ""
-        lowered = normalized.lower()
-        for key, phrase in SERVICE_PHRASE_MAP.items():
-            if key in lowered:
-                mapped_service = phrase
-                break
-        if not mapped_service:
-            mapped_service = normalized
-        key = mapped_service.lower()
-        if key in seen_clusters:
-            continue
-        seen_clusters.add(key)
-        mapped.append(mapped_service)
+        normalized = _normalize_service_token(service)
+        if normalized:
+            mapped.append(normalized)
     return _dedupe_preserve_order(mapped)
 
 
@@ -269,35 +268,11 @@ def _service_summary(lead: Dict[str, Any]) -> str:
     if not services:
         return ""
 
-    grouped: List[str] = []
-    family_group_used = False
-    for service in services:
-        lowered = service.lower()
-        mapped = ""
-        for key, phrase in SERVICE_PHRASE_MAP.items():
-            if key in lowered:
-                mapped = phrase
-                break
-        if mapped == "family, cosmetic, and denture care":
-            if family_group_used:
-                continue
-            family_group_used = True
-            grouped.append(mapped)
-            continue
-        if mapped:
-            grouped.append(mapped)
-        else:
-            grouped.append(service)
-
-    grouped = _dedupe_preserve_order(grouped)
+    grouped = _dedupe_preserve_order(services)
     if not grouped:
         return ""
     if len(grouped) == 1:
         return grouped[0]
-    if len(grouped) == 2 and grouped[0] == "family, cosmetic, and denture care":
-        return f"{grouped[0]}, plus {grouped[1]}"
-    if grouped[0] == "family, cosmetic, and denture care":
-        return f"{grouped[0]}, plus " + ", ".join(grouped[1:])
     if len(grouped) == 2:
         return f"{grouped[0]} and {grouped[1]}"
     return ", ".join(grouped[:-1]) + f", and {grouped[-1]}"
@@ -341,6 +316,20 @@ def _indefinite_article(phrase: str) -> str:
     if normalized.startswith(("honest", "hour", "heir", "honor", "invisalign", "emergency", "implant", "orthodontic", "a", "e", "i", "o", "u")):
         return "an"
     return "a"
+
+
+def _discovery_sentence(lead: Dict[str, Any]) -> str:
+    city = _lead_city(lead)
+    if not city:
+        return ""
+    service_focus = _service_search_phrase(lead)
+    if not service_focus:
+        return ""
+    article = _indefinite_article(service_focus)
+    return (
+        f"It also matters for how people search now. When someone asks Google, Maps, or AI tools for {article} {service_focus} "
+        f"or a {city} dental clinic, the clinic with the clearest service structure and trust signals has the advantage."
+    )
 
 
 def _clinic_strength_fragments(lead: Dict[str, Any]) -> List[str]:
@@ -541,17 +530,7 @@ def _build_first_email_body(lead: Dict[str, Any], strengths: List[str], business
     else:
         issue_sentence = "The gap I noticed is that these strengths could be easier to scan and act on."
 
-    search_sentence = email_angle or ""
-    if search_sentence.startswith(("For patients comparing clinics", "For patients comparing dentists")):
-        search_sentence = ""
-    if not search_sentence and city:
-        service_focus = _service_search_phrase(lead)
-        article = _indefinite_article(service_focus)
-        search_sentence = (
-            f"It also matters for how people search now. When someone asks Google, Maps, or AI tools for {article} {service_focus} or a {city} dental clinic, "
-            "the clinic with the clearest service structure and trust signals has the advantage."
-        )
-    search_sentence = escape(search_sentence)
+    search_sentence = escape(_discovery_sentence(lead))
 
     cta_sentence = (
         "I can send over a free website audit pointing out 3 to 5 things I would immediately improve around "
@@ -609,6 +588,17 @@ def _build_followup_body(lead: Dict[str, Any], variant: int = 1) -> str:
     search_sentence = email_angle or (
         "It also matters for how people search now. Google, Maps, and AI tools are increasingly pulling from structured, clearly written website content when deciding what businesses look most relevant."
     )
+    if any(phrase in search_sentence.lower() for phrase in (
+        "position the redesign",
+        "patient-conversion system",
+        "patient conversion system",
+        "turns more website visitors into consultations",
+        "redesign strategy",
+        "funnel system",
+    )):
+        search_sentence = (
+            "It also matters for how people search now. Google, Maps, and AI tools are increasingly pulling from structured, clearly written website content when deciding what businesses look most relevant."
+        )
     search_sentence = escape(search_sentence)
 
     if business_impact:
@@ -768,7 +758,6 @@ def _validate_email_sequence(sequence: Dict[str, Any]) -> None:
         sequence["emails"]["email_2"]["body"],
         sequence["emails"]["email_3"]["subject"],
         sequence["emails"]["email_3"]["body"],
-        sequence.get("loom_script", ""),
     )
 
 
@@ -853,7 +842,7 @@ def generate_email_sequence(lead: Dict[str, Any]) -> Dict[str, Any]:
             "Hey, Brian here. I took a quick look at your site and wanted to point out one thing I noticed. "
             f"The main issue is around {angle_bucket.lower()}, which can create friction for someone deciding whether to book, call, or keep looking. "
             "For dental clinics, that matters because people are often browsing quickly on mobile and comparing options. "
-            "I would tighten the structure so the site works more like a patient conversion system, with clearer service paths, stronger booking moments, and less friction. "
+            "I would tighten the structure so the site works more like a clearer booking path, with stronger service pages, better booking moments, and less friction. "
             "If useful, I would be happy to walk you through how I would approach it."
             if loom_recommended
             else ""
