@@ -8,6 +8,15 @@ from notion_client import Client
 import requests
 
 from .config import settings
+from .city_queue import (
+    ACTIVE_CITY_STATUSES,
+    CANADA_CITY_QUEUE_TITLE,
+    CITY_NAME_CANDIDATES,
+    CITY_STATUS_CANDIDATES,
+    CityQueueContext,
+    PROVINCE_CANDIDATES,
+    resolve_canada_city_queue_context,
+)
 from .models import FoundLead
 from .logger import DailyLogger
 from .utils import clean_phone, normalize_domain
@@ -37,13 +46,6 @@ PLACES_FIELD_MASK = ",".join(
         "places.businessStatus",
     )
 )
-CANADA_CITY_QUEUE_TITLE = "Canada City Queue"
-CITY_STATUS_CANDIDATES = ("City Status",)
-CITY_NAME_CANDIDATES = ("City", "Name")
-PROVINCE_CANDIDATES = ("Province",)
-ACTIVE_CITY_STATUSES = {"active"}
-
-
 def _is_obvious_franchise(name: str, website: str) -> bool:
     combined = f"{name} {website}".lower()
     return any(keyword in combined for keyword in FRANCHISE_KEYWORDS)
@@ -119,105 +121,13 @@ def _rotate(items: list[str], offset: int) -> list[str]:
     return items[offset:] + items[:offset]
 
 
-def _queue_client() -> Client:
-    if not settings.notion_api_key:
-        raise ValueError("NOTION_API_KEY is missing.")
-    return Client(auth=settings.notion_api_key)
-
-
-def _first_existing_property(properties: Dict[str, Any], candidates: tuple[str, ...]) -> str:
-    for candidate in candidates:
-        if candidate in properties:
-            return candidate
-    return ""
-
-
-def _property_text(property_value: Dict[str, Any]) -> str:
-    if not property_value:
-        return ""
-    if property_value.get("title"):
-        return "".join(item.get("plain_text", "") for item in property_value["title"]).strip()
-    if property_value.get("rich_text"):
-        return "".join(item.get("plain_text", "") for item in property_value["rich_text"]).strip()
-    if property_value.get("select"):
-        return str(property_value["select"].get("name", "")).strip()
-    if property_value.get("status"):
-        return str(property_value["status"].get("name", "")).strip()
-    if property_value.get("date"):
-        return str(property_value["date"].get("start", "")).strip()
-    if property_value.get("number") is not None:
-        return str(property_value["number"]).strip()
-    return ""
-
-
-def _data_source_rows(client: Client, data_source_id: str) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    next_cursor = None
-    while True:
-        kwargs: Dict[str, Any] = {"data_source_id": data_source_id, "page_size": 100}
-        if next_cursor:
-            kwargs["start_cursor"] = next_cursor
-        response = client.data_sources.query(**kwargs)
-        rows.extend(response.get("results", []))
-        if not response.get("has_more"):
-            break
-        next_cursor = response.get("next_cursor")
-        if not next_cursor:
-            break
-    return rows
-
-
-@lru_cache(maxsize=1)
-def _resolve_queue_active_location() -> tuple[str, str] | None:
-    try:
-        client = _queue_client()
-        search = getattr(client, "search", None)
-        if search is None:
-            return None
-        response = search(
-            query=CANADA_CITY_QUEUE_TITLE,
-            filter={"property": "object", "value": "database"},
-        )
-        database_id = ""
-        for result in response.get("results", []):
-            title_parts = result.get("title", [])
-            title_text = "".join(part.get("plain_text", "") for part in title_parts).strip()
-            if title_text.lower() == CANADA_CITY_QUEUE_TITLE.lower():
-                database_id = result.get("id", "")
-                break
-        if not database_id:
-            return None
-
-        database = client.databases.retrieve(database_id=database_id)
-        data_sources = database.get("data_sources", [])
-        if not data_sources:
-            return None
-
-        rows = _data_source_rows(client, data_sources[0]["id"])
-        for row in rows:
-            properties = row.get("properties", {})
-            status_field = _first_existing_property(properties, CITY_STATUS_CANDIDATES)
-            city_field = _first_existing_property(properties, CITY_NAME_CANDIDATES)
-            province_field = _first_existing_property(properties, PROVINCE_CANDIDATES)
-            status = _property_text(properties.get(status_field, {})).strip().lower()
-            if status not in ACTIVE_CITY_STATUSES:
-                continue
-            city = _property_text(properties.get(city_field, {}))
-            province = _property_text(properties.get(province_field, {}))
-            if city and province:
-                return city, province
-            if city:
-                return city, province or settings.active_province
-        return None
-    except Exception:
-        return None
+def resolve_active_city_queue_context() -> CityQueueContext:
+    return resolve_canada_city_queue_context()
 
 
 def resolve_active_city_context() -> tuple[str, str]:
-    resolved = _resolve_queue_active_location()
-    if resolved:
-        return resolved
-    return settings.active_city, settings.active_province
+    context = resolve_canada_city_queue_context()
+    return context.city, context.province
 
 
 def _build_search_plan() -> list[tuple[str, str]]:

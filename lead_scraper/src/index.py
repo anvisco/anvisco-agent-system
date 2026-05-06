@@ -4,8 +4,7 @@ from typing import Any, Dict
 
 from .auditor import audit_lead
 from .config import settings
-from .lead_finder import find_local_leads
-from .lead_finder import resolve_active_city_context
+from .lead_finder import find_local_leads, resolve_active_city_queue_context
 from .logger import DailyLogger
 from .models import AuditedLead, FoundLead
 from .notion_writer import (
@@ -128,11 +127,23 @@ def run_daily_scrape() -> None:
     logger = DailyLogger()
     logger.event("Starting lead scraper daily run")
     _validate_quota_settings()
-    active_city, active_province = resolve_active_city_context()
+    try:
+        city_context = resolve_active_city_queue_context()
+    except Exception as exc:
+        logger.error("City Queue", str(exc))
+        logger.write()
+        return
+
+    active_city = city_context.city
+    active_province = city_context.province
+    active_country = city_context.country
     logger.event(f"DRY_RUN: {settings.dry_run}")
     logger.event(f"Country scope: {settings.country_scope}")
+    logger.event(f"Active city source: {city_context.source}")
     logger.event(f"Active province: {active_province}")
     logger.event(f"Active city: {active_city}")
+    logger.event(f"Active country: {active_country}")
+    logger.event(f"Search location: {active_city}, {active_province}".rstrip(", "))
     logger.event(f"One city per run: {settings.one_city_per_run}")
     logger.event(f"MAX_NEW_LEADS_PER_RUN: {settings.max_new_leads_per_run}")
     logger.event(f"MAX_PLACES_RESULTS_PER_LOCATION: {settings.max_places_results_per_location}")
@@ -150,7 +161,7 @@ def run_daily_scrape() -> None:
     logger.event(f"Notion database ID present: {'yes' if settings.notion_database_id else 'no'}")
     logger.event(f"Search niche/query base: {settings.niche}")
     for location in settings.locations:
-        logger.event(f"Search location: {location}")
+        logger.event(f"Configured search location: {location}")
         logger.event(f"Search query used: {settings.niche} in {location}")
     logger.event("Lead finder implementation: Places API (New) searchText")
 

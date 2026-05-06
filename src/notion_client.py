@@ -32,6 +32,16 @@ def get_database_and_data_source() -> Tuple[Dict[str, Any], str]:
     return database, data_source_id
 
 
+def get_database_and_data_source_by_id(database_id: str) -> Tuple[Dict[str, Any], str]:
+    client = get_client()
+    database = client.databases.retrieve(database_id=database_id)
+    data_sources = database.get("data_sources", [])
+    if not data_sources:
+        raise ValueError("Could not find any data sources in the Notion database.")
+    data_source_id = data_sources[0]["id"]
+    return database, data_source_id
+
+
 def get_data_source_schema() -> Dict[str, Any]:
     client = get_client()
     database, data_source_id = get_database_and_data_source()

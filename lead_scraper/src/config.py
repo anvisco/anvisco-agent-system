@@ -33,6 +33,9 @@ def _as_float(value: str | None, default: float) -> float:
 class ScraperSettings:
     notion_api_key: str
     notion_database_id: str
+    canada_city_queue_database_id: str
+    city_queue_database_id: str
+    allow_env_city_fallback: bool
     google_places_api_key: str
     pagespeed_api_key: str
     openai_api_key: str
@@ -91,13 +94,9 @@ def _parse_csv_env(name: str, default: str) -> list[str]:
 
 
 def _build_locations() -> list[str]:
-    active_city = os.getenv("ACTIVE_CITY", "Toronto").strip()
-    active_province = os.getenv("ACTIVE_PROVINCE", "Ontario").strip()
     one_city_per_run = _as_bool(os.getenv("ONE_CITY_PER_RUN"), default=True)
     if one_city_per_run:
-        if active_province:
-            return [f"{active_city}, {active_province}"]
-        return [active_city]
+        return []
     return _parse_csv_env(
         "LEAD_SCRAPER_LOCATIONS",
         "Toronto, North York, Scarborough, Etobicoke, East York, York, Mississauga, Brampton, Vaughan, Markham, Richmond Hill, Thornhill, Oakville, Burlington, Hamilton, Milton, Pickering, Ajax, Whitby, Oshawa, Aurora, Newmarket, Barrie, Guelph, Kitchener, Waterloo, Cambridge, London, Windsor, Ottawa, Kanata, Nepean, Orleans, Kingston",
@@ -107,6 +106,9 @@ def _build_locations() -> list[str]:
 settings = ScraperSettings(
     notion_api_key=os.getenv("NOTION_API_KEY", "").strip(),
     notion_database_id=os.getenv("NOTION_DATABASE_ID", "").strip(),
+    canada_city_queue_database_id=os.getenv("CANADA_CITY_QUEUE_DATABASE_ID", "").strip(),
+    city_queue_database_id=os.getenv("CITY_QUEUE_DATABASE_ID", "").strip(),
+    allow_env_city_fallback=_as_bool(os.getenv("ALLOW_ENV_CITY_FALLBACK"), default=False),
     google_places_api_key=os.getenv("GOOGLE_PLACES_API_KEY", "").strip(),
     pagespeed_api_key=os.getenv("PAGESPEED_API_KEY", "").strip(),
     openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
