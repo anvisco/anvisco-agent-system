@@ -79,6 +79,7 @@ FOLLOW_UP_DUE_NOW_CANDIDATES = tuple(draft_flow.FOLLOW_UP_DUE_NOW_CANDIDATES)  #
 ADMIN_APPROVED_CANDIDATES = tuple(getattr(send_flow, "ADMIN_APPROVED_CANDIDATES", ("Admin Approved",)))
 SCHEDULED_SEND_DATE_CANDIDATES = tuple(getattr(draft_flow, "SCHEDULED_SEND_DATE_CANDIDATES", ("Scheduled Send Date",)))
 OUTREACH_BATCH_CANDIDATES = tuple(getattr(draft_flow, "OUTREACH_BATCH_CANDIDATES", ("Outreach Batch",)))
+SEQUENCE_STEP_CANDIDATES = tuple(getattr(draft_flow, "SEQUENCE_STEP_CANDIDATES", ("Sequence Step",)))
 
 CANADA_COUNTRY = "canada"
 APPROVED_SEND_MODES = {"auto_draft", "auto_send_gated"}
@@ -287,6 +288,10 @@ def _lead_scheduled_send_date(lead: Dict[str, Any]) -> Optional[date]:
     return _lead_date(lead, SCHEDULED_SEND_DATE_CANDIDATES)
 
 
+def _lead_sequence_step(lead: Dict[str, Any]) -> str:
+    return _lead_text(lead, SEQUENCE_STEP_CANDIDATES)
+
+
 def _lead_has_replied(lead: Dict[str, Any]) -> bool:
     return (
         _lead_status(lead) in REPLIED_STATUS_VALUES
@@ -356,8 +361,14 @@ def _lead_ready_to_draft(lead: Dict[str, Any]) -> bool:
 def _lead_follow_up_due_status(lead: Dict[str, Any]) -> bool:
     if _lead_has_replied(lead):
         return False
-    lead_status = _lead_status(lead)
-    if lead_status not in {"outreach_sent", "email_1_sent", "email_2_sent"}:
+    sequence_step = _lead_sequence_step(lead)
+    if sequence_step in {"Email 3 Sent", "Sequence Complete"}:
+        return False
+    follow_up_eligible = (
+        sequence_step in {"Email 1 Sent", "Email 2 Sent"}
+        or _lead_status(lead) in {"outreach_sent", "email_1_sent", "email_2_sent"}
+    )
+    if not follow_up_eligible:
         return False
     due_now = _lead_follow_up_due_now(lead)
     next_follow_up = _lead_next_follow_up(lead)

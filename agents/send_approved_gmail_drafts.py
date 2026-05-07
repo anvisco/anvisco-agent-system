@@ -196,6 +196,10 @@ def _lead_scheduled_send_date(lead: Dict[str, Any]) -> str:
     return _lead_property_text(lead, SCHEDULED_SEND_DATE_CANDIDATES)
 
 
+def _lead_sequence_step(lead: Dict[str, Any]) -> str:
+    return _lead_property_text(lead, SEQUENCE_STEP_CANDIDATES)
+
+
 def _lead_country(lead: Dict[str, Any]) -> str:
     return _normalize_text(draft_flow._lead_text_value(lead, draft_flow.COUNTRY_CANDIDATES))  # type: ignore[attr-defined]
 
@@ -569,6 +573,13 @@ def _business_days_from(start_date: datetime, days: int) -> str:
     return current.isoformat()
 
 
+_DRAFT_TO_SENT_STEP: Dict[str, str] = {
+    "Email 1 Drafted": "Email 1 Sent",
+    "Email 2 Drafted": "Email 2 Sent",
+    "Email 3 Drafted": "Email 3 Sent",
+}
+
+
 def build_notion_send_updates(
     schema_properties: Dict[str, Any],
     lead: Dict[str, Any],
@@ -579,6 +590,10 @@ def build_notion_send_updates(
     sent_date = now.isoformat()
     follow_up_date = _business_days_from(now, 3)
 
+    current_step = _lead_sequence_step(lead)
+    sent_step = _DRAFT_TO_SENT_STEP.get(current_step, "Email 1 Sent")
+    is_final_email = sent_step == "Email 3 Sent"
+
     _set_update(updates, schema_properties, GMAIL_SENT_STATUS_CANDIDATES, REQUIRED_GMAIL_SENT_STATUS)
     if _set_update(updates, schema_properties, ["Lead Status"], REQUIRED_LEAD_STATUS) is None:
         _set_update(updates, schema_properties, ["Outreach Status"], REQUIRED_OUTREACH_STATUS)
@@ -586,15 +601,16 @@ def build_notion_send_updates(
     if thread_id:
         _set_update(updates, schema_properties, GMAIL_THREAD_ID_CANDIDATES, thread_id)
     _set_update(updates, schema_properties, GMAIL_MATCH_STATUS_CANDIDATES, REQUIRED_GMAIL_MATCH_STATUS)
-    _set_update(updates, schema_properties, SEQUENCE_STEP_CANDIDATES, "Email 1 Sent")
-    _set_update(
-        updates,
-        schema_properties,
-        NEXT_FOLLOW_UP_DATE_CANDIDATES,
-        follow_up_date,
-        only_if_empty=True,
-        lead=lead,
-    )
+    _set_update(updates, schema_properties, SEQUENCE_STEP_CANDIDATES, sent_step)
+    if not is_final_email:
+        _set_update(
+            updates,
+            schema_properties,
+            NEXT_FOLLOW_UP_DATE_CANDIDATES,
+            follow_up_date,
+            only_if_empty=True,
+            lead=lead,
+        )
     return updates
 
 

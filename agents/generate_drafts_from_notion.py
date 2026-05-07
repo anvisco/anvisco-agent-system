@@ -243,7 +243,8 @@ def _has_date_value(property_value: Dict[str, Any]) -> bool:
 def _get_date_value(property_value: Dict[str, Any]) -> Optional[date]:
     if not property_value:
         return None
-    start = property_value.get("date", {}).get("start")
+    date_obj = property_value.get("date") or {}
+    start = date_obj.get("start") if isinstance(date_obj, dict) else None
     if not start:
         return None
     try:
