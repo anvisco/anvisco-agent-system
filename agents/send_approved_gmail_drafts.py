@@ -42,17 +42,22 @@ SEND_OPS_DIAGNOSTIC_SCAN = os.getenv("SEND_OPS_DIAGNOSTIC_SCAN", "false").strip(
 }
 
 
-def _max_sends_per_run() -> int:
-    raw_value = os.getenv("MAX_SENDS_PER_RUN", "10")
-    if not raw_value.strip():
-        return 10
+_UNLIMITED_MAX_SENDS_VALUES = {"", "none", "unlimited", "0"}
+
+
+def _max_sends_per_run() -> Optional[int]:
+    raw_value = os.getenv("MAX_SENDS_PER_RUN", "").strip()
+    if raw_value.lower() in _UNLIMITED_MAX_SENDS_VALUES:
+        return None
     try:
-        return max(1, int(raw_value))
+        n = int(raw_value)
+        return None if n <= 0 else n
     except ValueError:
-        return 10
+        print(f"Invalid MAX_SENDS_PER_RUN value: {raw_value}")
+        sys.exit(1)
 
 
-MAX_SENDS_PER_RUN = _max_sends_per_run()
+MAX_SENDS_PER_RUN: Optional[int] = _max_sends_per_run()
 _VERIFIED_SEND_AS_EMAIL: Optional[str] = None
 
 
@@ -659,7 +664,12 @@ def _print_global_gate_status() -> None:
     print(f"- ALLOW_RULE_BASED_APPROVAL: {'yes' if ALLOW_RULE_BASED_APPROVAL else 'no'}")
     print(f"- ALLOW_LEGACY_STATUS_FALLBACK: {'yes' if ALLOW_LEGACY_STATUS_FALLBACK else 'no'}")
     print(f"- SEND_OPS_DIAGNOSTIC_SCAN: {'yes' if SEND_OPS_DIAGNOSTIC_SCAN else 'no'}")
-    print(f"- MAX_SENDS_PER_RUN: {MAX_SENDS_PER_RUN}")
+    if MAX_SENDS_PER_RUN is None:
+        print("- MAX_SENDS_PER_RUN: unlimited")
+        print("max sends per run: unlimited")
+    else:
+        print(f"- MAX_SENDS_PER_RUN: {MAX_SENDS_PER_RUN}")
+        print(f"max sends per run: {MAX_SENDS_PER_RUN}")
     print(f"- Gmail send-as alias: {settings.gmail_send_as_email}")
     print(f"- Verified alias: {'yes' if verified_send_as_email else 'no'}")
     if ALLOW_RULE_BASED_APPROVAL:
@@ -808,7 +818,7 @@ def main() -> None:
 
     summary["eligible_records"] = len(eligible)
     summary["active_drafts_selected"] = len(eligible)
-    selected = eligible[:MAX_SENDS_PER_RUN]
+    selected = eligible if MAX_SENDS_PER_RUN is None else eligible[:MAX_SENDS_PER_RUN]
     summary["selected"] = len(selected)
     if SEND_DRY_RUN or not SEND_APPROVED_DRAFTS:
         summary["would_send"] = len(selected)

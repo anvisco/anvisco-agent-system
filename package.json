@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "outreach:daily": "node --experimental-strip-types src/orchestrator.ts",
-    "scraper:daily": "node --experimental-strip-types src/orchestrator.ts --step scraper",
+    "outreach:weekly:intake": "node --experimental-strip-types src/orchestrator.ts",
+    "scraper:weekly": "node --experimental-strip-types src/orchestrator.ts --step scraper",
     "drafts:create": "node --experimental-strip-types src/orchestrator.ts --step drafts",
     "replies:check": "node --experimental-strip-types src/orchestrator.ts --step replies",
     "followups:check": "node --experimental-strip-types src/orchestrator.ts --step followups"
