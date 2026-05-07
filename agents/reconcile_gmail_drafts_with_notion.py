@@ -52,7 +52,24 @@ def _log_rebuild_preview(lead_name: str, draft_id: str, reason: str, subject: st
 
 def main() -> None:
     schema = get_data_source_schema()
-    leads = draft_flow.query_all_leads_for_debug()
+    schema_properties = schema.get("properties", {})
+    ops_status_property = send_flow._first_existing_property_name(  # type: ignore[attr-defined]
+        schema_properties,
+        send_flow.OPS_STATUS_CANDIDATES,  # type: ignore[attr-defined]
+    )
+    all_leads = draft_flow.query_all_leads_for_debug()
+    legacy_approval_path_used = False
+    if ops_status_property:
+        leads = [
+            lead
+            for lead in all_leads
+            if send_flow._lead_ops_status(lead) == send_flow.OPS_READY_TO_SEND  # type: ignore[attr-defined]
+        ]
+    elif send_flow.ALLOW_LEGACY_STATUS_FALLBACK:  # type: ignore[attr-defined]
+        leads = all_leads
+        legacy_approval_path_used = True
+    else:
+        leads = []
     verified_from_email = _verified_send_as_email()
 
     if settings.gmail_send_as_email and not verified_from_email:
@@ -67,10 +84,26 @@ def main() -> None:
     print(f"- label: {ANVIS_LEADS_LABEL}")
     print(f"- Gmail send-as alias: {settings.gmail_send_as_email}")
     print(f"- Verified alias: {'yes' if verified_from_email else 'no'}")
+    print(f"- workflow source: {'Ops Status' if ops_status_property else 'Ops Status missing'}")
+    print(
+        "- legacy fallback enabled: "
+        f"{'yes' if send_flow.ALLOW_LEGACY_STATUS_FALLBACK else 'no'}"  # type: ignore[attr-defined]
+    )
+    print(
+        "- active approval source: "
+        f"{'Ops Status only' if ops_status_property else ('legacy fallback' if legacy_approval_path_used else 'none - fail closed')}"
+    )
+    print(f"- legacy approval path used: {'yes' if legacy_approval_path_used else 'no'}")
+    if ops_status_property:
+        print(f"- ops_ready_to_send selected: {len(leads)}")
+    elif not legacy_approval_path_used:
+        print("- Ops Status field missing; legacy status fallback is disabled.")
+    print(f"Loaded Notion records before source-of-truth filtering: {len(all_leads)}")
     print(f"Loaded Notion records: {len(leads)}")
 
     summary = {
         "records_checked": 0,
+        "approved_by_ops": 0,
         "approved_by_admin": 0,
         "approved_by_rules": 0,
         "eligible_records": 0,
@@ -92,15 +125,24 @@ def main() -> None:
         summary["records_checked"] += 1
         lead_name = send_flow._lead_name(lead)  # type: ignore[attr-defined]
 
-        block_reasons = send_flow._lead_send_block_reasons(lead)  # type: ignore[attr-defined]
+        if ops_status_property:
+            block_reasons = send_flow._ops_send_safety_block_reasons(lead)  # type: ignore[attr-defined]
+            approval_path = "ops"
+        elif legacy_approval_path_used:
+            block_reasons = send_flow._lead_send_block_reasons(lead)  # type: ignore[attr-defined]
+            approval_path = send_flow._lead_approval_path(lead)  # type: ignore[attr-defined]
+        else:
+            block_reasons = ["Ops Status field is missing and legacy status fallback is disabled"]
+            approval_path = ""
         if block_reasons:
             summary["skipped_ineligible"] += 1
             for reason in block_reasons:
                 skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
             continue
 
-        approval_path = send_flow._lead_approval_path(lead)  # type: ignore[attr-defined]
-        if approval_path == "admin":
+        if approval_path == "ops":
+            summary["approved_by_ops"] += 1
+        elif approval_path == "admin":
             summary["approved_by_admin"] += 1
         elif approval_path == "rule":
             summary["approved_by_rules"] += 1

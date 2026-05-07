@@ -29,6 +29,7 @@ jobs:
       SEND_MODE: auto_draft
       AUTO_SEND_FIRST_EMAILS: "false"
       REQUIRE_ADMIN_APPROVAL_FOR_SEND: "true"
+      ALLOW_LEGACY_STATUS_FALLBACK: "false"
       COUNTRY_SCOPE: Canada
       ACTIVE_PROVINCE: Ontario
       ACTIVE_CITY: Toronto

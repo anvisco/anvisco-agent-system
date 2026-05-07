@@ -28,6 +28,18 @@ from src.safety import validate_prospect_copy
 SEND_DRY_RUN = os.getenv("SEND_DRY_RUN", "true").strip().lower() in {"1", "true", "yes", "on"}
 SEND_APPROVED_DRAFTS = os.getenv("SEND_APPROVED_DRAFTS", "false").strip().lower() in {"1", "true", "yes", "on"}
 ALLOW_RULE_BASED_APPROVAL = os.getenv("ALLOW_RULE_BASED_APPROVAL", "false").strip().lower() in {"1", "true", "yes", "on"}
+ALLOW_LEGACY_STATUS_FALLBACK = os.getenv("ALLOW_LEGACY_STATUS_FALLBACK", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+SEND_OPS_DIAGNOSTIC_SCAN = os.getenv("SEND_OPS_DIAGNOSTIC_SCAN", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 def _max_sends_per_run() -> int:
@@ -54,6 +66,7 @@ def _verified_send_as_email() -> str:
 NAME_FIELD_CANDIDATES = draft_flow.NAME_FIELD_CANDIDATES
 EMAIL_FIELD_CANDIDATES = draft_flow.EMAIL_FIELD_CANDIDATES
 DO_NOT_CONTACT_CANDIDATES = draft_flow.DO_NOT_CONTACT_CANDIDATES
+OPS_STATUS_CANDIDATES = getattr(draft_flow, "OPS_STATUS_CANDIDATES", ["Ops Status"])
 STATUS_FIELD_CANDIDATES = draft_flow.STATUS_FIELD_CANDIDATES
 DUPLICATE_STATUS_CANDIDATES = draft_flow.DUPLICATE_STATUS_CANDIDATES
 GMAIL_DRAFT_ID_CANDIDATES = draft_flow.GMAIL_DRAFT_ID_CANDIDATES
@@ -72,6 +85,7 @@ BLOCKED_LEAD_STATUSES = {"not_fit", "archived", "paid_client"}
 BLOCKED_DUPLICATE_STATUSES = {"duplicate", "possible_duplicate", "already_contacted", "do_not_contact"}
 BLOCKED_GMAIL_MATCH_STATUSES = {"sent_exists", "replied"}
 BLOCKED_GMAIL_SENT_STATUSES = {"sent"}
+OPS_READY_TO_SEND = "ready_to_send"
 REQUIRED_SEND_MODE = "auto_send_gated"
 REQUIRED_OUTREACH_STATUS = "Email 1 Sent"
 REQUIRED_LEAD_STATUS = "outreach_sent"
@@ -128,6 +142,10 @@ def _lead_email(lead: Dict[str, Any]) -> str:
 
 def _lead_send_mode(lead: Dict[str, Any]) -> str:
     return _lead_property_text(lead, SEND_MODE_CANDIDATES)
+
+
+def _lead_ops_status(lead: Dict[str, Any]) -> str:
+    return _normalize_choice(_lead_property_text(lead, OPS_STATUS_CANDIDATES))
 
 
 def _lead_status(lead: Dict[str, Any]) -> str:
@@ -224,6 +242,51 @@ def _rule_based_approval_block_reasons(lead: Dict[str, Any]) -> List[str]:
     gmail_sent_status = _lead_gmail_sent_status(lead)
     if gmail_sent_status in BLOCKED_GMAIL_SENT_STATUSES:
         reasons.append(f"Gmail Sent Status is {gmail_sent_status}")
+
+    lead_status = _lead_status(lead)
+    if lead_status in BLOCKED_LEAD_STATUSES:
+        reasons.append(f"Lead Status is {lead_status}")
+
+    if not _verified_send_as_email():
+        reasons.append(f"sender alias {settings.gmail_send_as_email} is not verified")
+
+    return reasons
+
+
+def _ops_send_safety_block_reasons(lead: Dict[str, Any]) -> List[str]:
+    reasons: List[str] = []
+
+    if _lead_country(lead) != "canada":
+        country = draft_flow._lead_text_value(lead, draft_flow.COUNTRY_CANDIDATES)  # type: ignore[attr-defined]
+        reasons.append(f"Country is {country or '<empty>'}")
+
+    if not _lead_email(lead):
+        reasons.append("Email is missing")
+
+    if not _lead_website(lead):
+        reasons.append("Website is missing")
+
+    if not _lead_gmail_draft_id(lead):
+        reasons.append("Gmail Draft ID is missing")
+
+    casl_basis = _normalize_choice(_lead_casl_basis(lead))
+    if casl_basis not in RULE_APPROVAL_ALLOWED_CASL_BASIS:
+        reasons.append(f"CASL Basis is {casl_basis or '<empty>'}")
+
+    if _lead_do_not_contact(lead):
+        reasons.append("Do Not Contact is true")
+
+    duplicate_status = _normalize_choice(_lead_duplicate_status(lead))
+    if duplicate_status in BLOCKED_DUPLICATE_STATUSES:
+        reasons.append(f"Duplicate Status is {duplicate_status}")
+
+    gmail_sent_status = _lead_gmail_sent_status(lead)
+    if gmail_sent_status in BLOCKED_GMAIL_SENT_STATUSES:
+        reasons.append(f"Gmail Sent Status is {gmail_sent_status}")
+
+    gmail_match_status = _normalize_choice(_lead_gmail_match_status(lead))
+    if gmail_match_status in BLOCKED_GMAIL_MATCH_STATUSES:
+        reasons.append(f"Gmail Match Status is {gmail_match_status}")
 
     lead_status = _lead_status(lead)
     if lead_status in BLOCKED_LEAD_STATUSES:
@@ -422,6 +485,22 @@ def _skip_not_active_draft(summary: Dict[str, int], skip_reasons: Dict[str, int]
     print(f"SKIP | {lead_name} | Gmail Draft ID: {draft_id} | Reasons: not_active_draft ({reason})")
 
 
+def _skip_ops_status_not_ready_to_send(
+    summary: Dict[str, int],
+    skip_reasons: Dict[str, int],
+    lead_name: str,
+    ops_status: str,
+) -> None:
+    reason = "skipped_ops_status_not_ready_to_send"
+    summary["skipped"] += 1
+    summary[reason] += 1
+    skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+    print(
+        f"SKIP | {lead_name} | Ops Status: {ops_status or '<empty>'} | "
+        f"Reasons: {reason}"
+    )
+
+
 def _property_update(property_type: str, value: Any) -> Optional[Dict[str, Any]]:
     if value is None:
         return None
@@ -509,8 +588,65 @@ def build_notion_send_updates(
     return updates
 
 
-def _load_records() -> List[Dict[str, Any]]:
-    return draft_flow.query_all_leads_for_debug()
+def _query_records(
+    data_source_id: str,
+    *,
+    filter_payload: Optional[Dict[str, Any]] = None,
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    client = get_client()
+    records: List[Dict[str, Any]] = []
+    next_cursor: Optional[str] = None
+
+    while True:
+        page_size = 100
+        if limit is not None:
+            remaining = limit - len(records)
+            if remaining <= 0:
+                break
+            page_size = min(page_size, remaining)
+
+        kwargs: Dict[str, Any] = {"data_source_id": data_source_id, "page_size": page_size}
+        if filter_payload:
+            kwargs["filter"] = filter_payload
+        if next_cursor:
+            kwargs["start_cursor"] = next_cursor
+
+        response = client.data_sources.query(**kwargs)
+        records.extend(response.get("results", []))
+        if not response.get("has_more"):
+            break
+        next_cursor = response.get("next_cursor")
+        if not next_cursor:
+            break
+
+    return records
+
+
+def _load_records(data_source_id: str, *, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    return _query_records(data_source_id, limit=limit)
+
+
+def _build_ops_ready_to_send_filter(
+    schema_properties: Dict[str, Any],
+    ops_status_property: str,
+) -> Optional[Dict[str, Any]]:
+    return draft_flow._build_equality_filter(  # type: ignore[attr-defined]
+        ops_status_property,
+        schema_properties[ops_status_property].get("type"),
+        OPS_READY_TO_SEND,
+    )
+
+
+def _query_ops_ready_to_send_records(
+    data_source_id: str,
+    schema_properties: Dict[str, Any],
+    ops_status_property: str,
+) -> List[Dict[str, Any]]:
+    filter_payload = _build_ops_ready_to_send_filter(schema_properties, ops_status_property)
+    if not filter_payload:
+        return []
+    return _query_records(data_source_id, filter_payload=filter_payload)
 
 
 def _print_global_gate_status() -> None:
@@ -521,11 +657,13 @@ def _print_global_gate_status() -> None:
         print("Global send gate: live mode")
     print(f"- SEND_APPROVED_DRAFTS: {'yes' if SEND_APPROVED_DRAFTS else 'no'}")
     print(f"- ALLOW_RULE_BASED_APPROVAL: {'yes' if ALLOW_RULE_BASED_APPROVAL else 'no'}")
+    print(f"- ALLOW_LEGACY_STATUS_FALLBACK: {'yes' if ALLOW_LEGACY_STATUS_FALLBACK else 'no'}")
+    print(f"- SEND_OPS_DIAGNOSTIC_SCAN: {'yes' if SEND_OPS_DIAGNOSTIC_SCAN else 'no'}")
     print(f"- MAX_SENDS_PER_RUN: {MAX_SENDS_PER_RUN}")
     print(f"- Gmail send-as alias: {settings.gmail_send_as_email}")
     print(f"- Verified alias: {'yes' if verified_send_as_email else 'no'}")
     if ALLOW_RULE_BASED_APPROVAL:
-        print("Rule-based approval path is enabled.")
+        print("Rule-based approval path is available only when legacy fallback is active.")
     if not SEND_APPROVED_DRAFTS:
         print("GLOBAL BLOCK | SEND_APPROVED_DRAFTS=false")
     if not verified_send_as_email:
@@ -538,15 +676,55 @@ def main() -> None:
     _, data_source_id = get_database_and_data_source()
     schema = get_data_source_schema()
     schema_properties = schema.get("properties", {})
-    records = _load_records()
+    ops_status_property = _first_existing_property_name(schema_properties, OPS_STATUS_CANDIDATES)
 
     _print_global_gate_status()
+    legacy_approval_path_used = False
+    skipped_ops_status_not_ready_to_send = 0
+    if ops_status_property:
+        records = _query_ops_ready_to_send_records(data_source_id, schema_properties, ops_status_property)
+        print("send candidate source: Ops Status")
+        print("workflow source: Ops Status")
+        print(f"legacy fallback enabled: {'true' if ALLOW_LEGACY_STATUS_FALLBACK else 'false'}")
+        print("active approval source: Ops Status only")
+        print("legacy approval path used: false")
+        print(f"ops_ready_to_send queried: {len(records)}")
+        print(f"ops_ready_to_send selected: {len(records)}")
+        if SEND_OPS_DIAGNOSTIC_SCAN:
+            all_records = _load_records(data_source_id)
+            skipped_ops_status_not_ready_to_send = 0
+            for lead in all_records:
+                ops_status = _lead_ops_status(lead)
+                if ops_status == OPS_READY_TO_SEND:
+                    continue
+                skipped_ops_status_not_ready_to_send += 1
+                print(
+                    f"SKIP | {_lead_name(lead)} | Ops Status: {ops_status or '<empty>'} | "
+                    "Reasons: skipped_ops_status_not_ready_to_send"
+                )
+    else:
+        print("send candidate source: legacy approval fallback" if ALLOW_LEGACY_STATUS_FALLBACK else "send candidate source: Ops Status")
+        print("workflow source: Ops Status missing")
+        print(f"legacy fallback enabled: {'true' if ALLOW_LEGACY_STATUS_FALLBACK else 'false'}")
+        if ALLOW_LEGACY_STATUS_FALLBACK:
+            records = _load_records(data_source_id)
+            legacy_approval_path_used = True
+            print("active approval source: legacy fallback")
+            print("legacy approval path used: true")
+        else:
+            records = []
+            print("active approval source: none - fail closed")
+            print("legacy approval path used: false")
+            print("Ops Status field missing; legacy status fallback is disabled.")
     print(f"Loaded Notion records: {len(records)}")
 
     eligible: List[Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]] = []
     summary = {
         "records_checked": 0,
+        "ops_ready_to_send_queried": len(records) if ops_status_property else 0,
+        "ops_ready_to_send_selected": len(records) if ops_status_property else 0,
         "eligible_records": 0,
+        "approved_by_ops": 0,
         "approved_by_admin": 0,
         "approved_by_rules": 0,
         "active_drafts_selected": 0,
@@ -558,17 +736,29 @@ def main() -> None:
         "sent_labels_applied": 0,
         "sent_label_apply_failed": 0,
         "skipped": 0,
+        "skipped_ops_status_not_ready_to_send": skipped_ops_status_not_ready_to_send,
         "stale_gmail_draft_id": 0,
         "not_active_draft": 0,
         "errors": 0,
     }
     skip_reasons: Dict[str, int] = {}
+    if skipped_ops_status_not_ready_to_send:
+        summary["skipped"] += skipped_ops_status_not_ready_to_send
+        skip_reasons["skipped_ops_status_not_ready_to_send"] = skipped_ops_status_not_ready_to_send
 
     for lead in records:
         summary["records_checked"] += 1
         lead_name = _lead_name(lead)
-        reasons = _lead_send_block_reasons(lead)
-        approval_path = _lead_approval_path(lead)
+
+        if ops_status_property:
+            reasons = _ops_send_safety_block_reasons(lead)
+            approval_path = "ops"
+        elif legacy_approval_path_used:
+            reasons = _lead_send_block_reasons(lead)
+            approval_path = _lead_approval_path(lead)
+        else:
+            reasons = ["Ops Status field is missing and legacy status fallback is disabled"]
+            approval_path = ""
         draft_id = _lead_gmail_draft_id(lead)
         if reasons:
             summary["skipped"] += 1
@@ -580,7 +770,9 @@ def main() -> None:
             )
             continue
 
-        if approval_path == "admin":
+        if approval_path == "ops":
+            summary["approved_by_ops"] += 1
+        elif approval_path == "admin":
             summary["approved_by_admin"] += 1
         elif approval_path == "rule":
             summary["approved_by_rules"] += 1
