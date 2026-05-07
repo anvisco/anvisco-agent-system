@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import os
 import re
 import sys
 from datetime import date, datetime, timedelta, timezone
+from html import unescape
 from email.utils import getaddresses
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -12,7 +14,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from notion_client import Client
 
 from src.config import settings
-from src.gmail_client import get_gmail_service
+from src.gmail_client import get_gmail_service, get_profile_email
 from src.notion_client import get_data_source_schema, get_database_and_data_source
 
 
@@ -28,8 +30,9 @@ def _env_flag(name: str, default: bool) -> bool:
 
 
 DRY_RUN: bool = _env_flag("SENT_RECONCILE_DRY_RUN", True)
-GMAIL_SENT_LOOKBACK_DAYS: int = 30
-FOLLOWUP_BUSINESS_DAYS: int = 3
+GMAIL_SENT_LOOKBACK_DAYS: int = 60
+FOLLOWUP_BUSINESS_DAYS_EMAIL_1: int = 3
+FOLLOWUP_BUSINESS_DAYS_EMAIL_2: int = 5
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +55,35 @@ SCHEDULED_SEND_DATE_CANDIDATES: List[str] = ["Scheduled Send Date"]
 DO_NOT_CONTACT_CANDIDATES: List[str] = ["Do Not Contact", "DNC"]
 EMAIL_1_SUBJECT_CANDIDATES: List[str] = ["Email 1 Subject", "Email Subject", "Subject"]
 BLOCKER_REASON_CANDIDATES: List[str] = ["Blocker Reason"]
+
+HISTORICAL_OUTREACH_SIGNALS: Tuple[str, ...] = (
+    "web design services",
+    "web design services to improve conversion",
+    "web design",
+    "follow-up:",
+    "website",
+    "booking",
+    "conversion",
+    "i build websites that run, grow, and optimize your business",
+    "anvisco.com",
+    "anvis",
+    "get a free website audit",
+    "book a discovery call",
+    "websites built to run, grow, and get discovered",
+)
+
+DELIVERY_FAILURE_SIGNALS: Tuple[str, ...] = (
+    "delivery status notification",
+    "delivery failure",
+    "message delivery failure",
+    "undeliverable",
+    "returned to sender",
+    "mailer-daemon",
+    "postmaster",
+)
+
+HISTORICAL_VERBOSE_REJECTION_LIMIT = 8
+HISTORICAL_ACCEPTED_EXAMPLE_LIMIT = 10
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +362,7 @@ def _classify_page(page: Dict[str, Any]) -> Tuple[bool, str]:
 def _search_sent_messages(
     service: Any,
     query: str,
-    max_results: int = 10,
+    max_results: int = 50,
 ) -> List[Dict[str, Any]]:
     response = (
         service.users()
@@ -341,15 +373,14 @@ def _search_sent_messages(
     return list(response.get("messages", []))
 
 
-def _get_message_metadata(service: Any, message_id: str) -> Dict[str, Any]:
+def _get_message_full(service: Any, message_id: str) -> Dict[str, Any]:
     return (
         service.users()
         .messages()
         .get(
             userId="me",
             id=message_id,
-            format="metadata",
-            metadataHeaders=["To", "Subject", "From", "Date"],
+            format="full",
         )
         .execute()
     )
@@ -372,6 +403,156 @@ def _header_email_match(header_value: str, lead_email: str) -> bool:
     if parsed:
         return expected in parsed
     return expected in header_value.lower()
+
+
+def _header_emails(header_value: str) -> List[str]:
+    parsed = [email.lower() for _, email in getaddresses([header_value]) if email]
+    if parsed:
+        return parsed
+    fallback = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", header_value or "")
+    return [email.lower() for email in fallback]
+
+
+def _decode_message_data(data: str) -> str:
+    if not data:
+        return ""
+    padded = data + "=" * (-len(data) % 4)
+    try:
+        return base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _extract_message_text(payload: Dict[str, Any]) -> str:
+    if not payload:
+        return ""
+    mime_type = str(payload.get("mimeType", "") or "").lower()
+    body = payload.get("body", {}) or {}
+    data = body.get("data", "")
+    if mime_type in {"text/html", "text/plain"} and data:
+        return unescape(_decode_message_data(data))
+    for part in payload.get("parts", []) or []:
+        text = _extract_message_text(part)
+        if text:
+            return text
+    if data:
+        return unescape(_decode_message_data(data))
+    return ""
+
+
+def _message_body_text(message: Dict[str, Any]) -> str:
+    return _extract_message_text(message.get("payload", {}) or {})
+
+
+def _normalized_text(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip().lower()
+
+
+def _message_from_email(message: Dict[str, Any]) -> str:
+    headers = _message_headers(message)
+    from_hdr = headers.get("from", "")
+    emails = _header_emails(from_hdr)
+    return emails[0] if emails else ""
+
+
+def _allowed_sender_emails() -> List[str]:
+    candidates = {
+        settings.gmail_send_as_email.strip().lower(),
+    }
+    try:
+        profile_email = get_profile_email()
+        if profile_email:
+            candidates.add(str(profile_email).strip().lower())
+    except Exception as exc:
+        print(f"    Warning: could not read authenticated Gmail profile email: {exc}")
+    return sorted(email for email in candidates if email)
+
+
+def _has_allowed_sender(message: Dict[str, Any], allowed_senders: List[str]) -> bool:
+    if not allowed_senders:
+        return False
+    from_email = _message_from_email(message)
+    if from_email:
+        return from_email in allowed_senders
+    headers = _message_headers(message)
+    from_hdr = headers.get("from", "").lower()
+    return any(sender in from_hdr for sender in allowed_senders)
+
+
+def _is_delivery_failure_message(message: Dict[str, Any]) -> bool:
+    headers = _message_headers(message)
+    subject = _normalized_text(headers.get("subject", ""))
+    body = _normalized_text(_message_body_text(message))
+    if any(signal in subject for signal in DELIVERY_FAILURE_SIGNALS):
+        return True
+    if any(signal in body for signal in DELIVERY_FAILURE_SIGNALS):
+        return True
+    return False
+
+
+def _historical_signal_hits(message: Dict[str, Any]) -> List[str]:
+    headers = _message_headers(message)
+    subject = _normalized_text(headers.get("subject", ""))
+    body = _normalized_text(_message_body_text(message))
+    snippet = _normalized_text(message.get("snippet", ""))
+    haystack = f"{subject}\n{body}\n{snippet}"
+    return [signal for signal in HISTORICAL_OUTREACH_SIGNALS if signal in haystack]
+
+
+def _subject_signal_hits(subject: str) -> List[str]:
+    normalized = _normalized_text(subject)
+    return [signal for signal in HISTORICAL_OUTREACH_SIGNALS if signal in normalized]
+
+
+def _message_label_strings(message: Dict[str, Any]) -> List[str]:
+    return [str(label).strip() for label in (message.get("labelIds") or []) if str(label).strip()]
+
+
+def _historical_message_debug_info(
+    message: Dict[str, Any],
+    lead_email: str,
+    allowed_senders: List[str],
+) -> Dict[str, Any]:
+    headers = _message_headers(message)
+    labels = _message_label_strings(message)
+    subject = headers.get("subject", "")
+    from_hdr = headers.get("from", "")
+    to_hdr = headers.get("to", "")
+    sender_match = _has_allowed_sender(message, allowed_senders)
+    subject_hits = _subject_signal_hits(subject)
+    signal_hits = subject_hits or _historical_signal_hits(message)
+
+    debug = {
+        "subject": subject,
+        "from": from_hdr,
+        "to": to_hdr,
+        "labels": labels,
+        "sender_match": sender_match,
+        "subject_hits": subject_hits,
+        "signal_hits": signal_hits,
+        "accepted": False,
+        "reason": "",
+    }
+
+    if "SENT" not in {label.upper() for label in labels}:
+        debug["reason"] = "rejected_missing_sent_label"
+        return debug
+
+    if not _header_email_match(to_hdr, lead_email):
+        debug["reason"] = "rejected_to_mismatch"
+        return debug
+
+    if _is_delivery_failure_message(message):
+        debug["reason"] = "rejected_bounce_signature"
+        return debug
+
+    if not signal_hits:
+        debug["reason"] = "rejected_missing_outreach_signal"
+        return debug
+
+    debug["accepted"] = True
+    debug["reason"] = "accepted_historical_outreach"
+    return debug
 
 
 def _strip_subject_prefixes(subject: str) -> str:
@@ -409,79 +590,144 @@ def _subject_match_quality(gmail_subject: str, expected_subject: str) -> str:
     return ""
 
 
-def _find_gmail_sent_match(
+def _load_sent_candidates(
     service: Any,
     lead_email: str,
-    email_1_subject: str,
-) -> Optional[Dict[str, Any]]:
-    """
-    Search Gmail Sent folder for a message matching this lead.
-
-    Acceptance criteria (all must pass):
-      1. Message carries the SENT label.
-      2. Recipient (To header) exactly parses to lead_email.
-      3. Subject exactly matches Email 1 Subject, or passes strong normalization.
-      4. internalDate is within GMAIL_SENT_LOOKBACK_DAYS days.
-
-    Returns dict{message_id, thread_id, sent_date, subject} or None.
-    No Gmail mutations are made.
-    """
-    if not lead_email or not email_1_subject:
-        return None
+    allowed_senders: List[str],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    if not lead_email:
+        return [], []
 
     query = f"to:{lead_email} in:sent newer_than:{GMAIL_SENT_LOOKBACK_DAYS}d"
-    stubs = _search_sent_messages(service, query, max_results=10)
+    stubs = _search_sent_messages(service, query, max_results=50)
     if not stubs:
-        return None
+        return [], []
 
     cutoff_dt = datetime.now(tz=timezone.utc) - timedelta(days=GMAIL_SENT_LOOKBACK_DAYS)
-    matches: List[Dict[str, Any]] = []
+    messages: List[Dict[str, Any]] = []
+    diagnostics: List[Dict[str, Any]] = []
 
     for stub in stubs:
         msg_id = stub.get("id", "")
         if not msg_id:
+            diagnostics.append({
+                "subject": "",
+                "from": "",
+                "to": "",
+                "labels": [],
+                "sender_match": False,
+                "subject_hits": [],
+                "signal_hits": [],
+                "accepted": False,
+                "reason": "rejected_unknown",
+            })
             continue
 
         try:
-            msg = _get_message_metadata(service, msg_id)
+            msg = _get_message_full(service, msg_id)
         except Exception as exc:
             print(f"    Warning: could not fetch Gmail message {msg_id}: {exc}")
+            diagnostics.append({
+                "subject": "",
+                "from": "",
+                "to": "",
+                "labels": [],
+                "sender_match": False,
+                "subject_hits": [],
+                "signal_hits": [],
+                "accepted": False,
+                "reason": "rejected_unknown",
+            })
             continue
 
         # Must carry the SENT label
-        if "SENT" not in (msg.get("labelIds") or []):
+        labels = _message_label_strings(msg)
+        if "SENT" not in {label.upper() for label in labels}:
+            diagnostics.append({
+                "subject": _message_headers(msg).get("subject", ""),
+                "from": _message_headers(msg).get("from", ""),
+                "to": _message_headers(msg).get("to", ""),
+                "labels": labels,
+                "sender_match": _has_allowed_sender(msg, allowed_senders),
+                "subject_hits": _subject_signal_hits(_message_headers(msg).get("subject", "")),
+                "signal_hits": _historical_signal_hits(msg),
+                "accepted": False,
+                "reason": "rejected_missing_sent_label",
+            })
             continue
 
         # Date guard
         internal_ms = int(msg.get("internalDate") or 0)
         if not internal_ms:
+            diagnostics.append({
+                "subject": _message_headers(msg).get("subject", ""),
+                "from": _message_headers(msg).get("from", ""),
+                "to": _message_headers(msg).get("to", ""),
+                "labels": labels,
+                "sender_match": _has_allowed_sender(msg, allowed_senders),
+                "subject_hits": _subject_signal_hits(_message_headers(msg).get("subject", "")),
+                "signal_hits": _historical_signal_hits(msg),
+                "accepted": False,
+                "reason": "rejected_missing_timestamp",
+            })
             continue
         sent_dt = datetime.fromtimestamp(internal_ms / 1000, tz=timezone.utc)
         if sent_dt < cutoff_dt:
+            diagnostics.append({
+                "subject": _message_headers(msg).get("subject", ""),
+                "from": _message_headers(msg).get("from", ""),
+                "to": _message_headers(msg).get("to", ""),
+                "labels": labels,
+                "sender_match": _has_allowed_sender(msg, allowed_senders),
+                "subject_hits": _subject_signal_hits(_message_headers(msg).get("subject", "")),
+                "signal_hits": _historical_signal_hits(msg),
+                "accepted": False,
+                "reason": "rejected_outside_lookback",
+            })
+            continue
+
+        debug = _historical_message_debug_info(msg, lead_email, allowed_senders)
+        diagnostics.append(debug)
+        if not debug["accepted"]:
             continue
 
         headers = _message_headers(msg)
-
-        # Recipient guard — lead_email must appear in the To header
-        to_hdr = headers.get("to", "")
-        if not _header_email_match(to_hdr, lead_email):
-            continue
-
-        # Prefer exact subject match; allow only strong normalization fallback.
         gmail_subject = headers.get("subject", "")
-        match_quality = _subject_match_quality(gmail_subject, email_1_subject)
-        if not match_quality:
-            continue
-
         thread_id = stub.get("threadId", "") or msg.get("threadId", "")
-        matches.append({
+        messages.append({
             "message_id": msg_id,
             "thread_id": thread_id,
             "sent_date": sent_dt.date(),
             "sent_dt": sent_dt,
             "subject": gmail_subject,
-            "match_quality": match_quality,
+            "body": _message_body_text(msg),
+            "from_email": _message_from_email(msg),
+            "sender_match": debug["sender_match"],
+            "signal_hits": debug["signal_hits"],
         })
+
+    messages.sort(
+        key=lambda item: item.get("sent_dt", datetime.min.replace(tzinfo=timezone.utc)),
+        reverse=True,
+    )
+    return messages, diagnostics
+
+
+def _find_subject_match(
+    sent_messages: List[Dict[str, Any]],
+    email_1_subject: str,
+) -> Optional[Dict[str, Any]]:
+    if not email_1_subject:
+        return None
+
+    matches: List[Dict[str, Any]] = []
+    for message in sent_messages:
+        match_quality = _subject_match_quality(message.get("subject", ""), email_1_subject)
+        if not match_quality:
+            continue
+        matched = dict(message)
+        matched["match_quality"] = match_quality
+        matches.append(matched)
 
     if not matches:
         return None
@@ -498,6 +744,29 @@ def _find_gmail_sent_match(
     return best
 
 
+def _sequence_step_from_sent_count(sent_count: int) -> str:
+    if sent_count >= 3:
+        return "Sequence Complete"
+    if sent_count == 2:
+        return "Email 2 Sent"
+    return "Email 1 Sent"
+
+
+def _followup_days_for_sequence_step(sequence_step: str) -> Optional[int]:
+    if sequence_step == "Email 1 Sent":
+        return FOLLOWUP_BUSINESS_DAYS_EMAIL_1
+    if sequence_step == "Email 2 Sent":
+        return FOLLOWUP_BUSINESS_DAYS_EMAIL_2
+    return None
+
+
+def _next_followup_for_sequence(sent_date: date, sequence_step: str) -> Optional[date]:
+    followup_days = _followup_days_for_sequence_step(sequence_step)
+    if followup_days is None:
+        return None
+    return _add_business_days(sent_date, followup_days)
+
+
 # ---------------------------------------------------------------------------
 # Notion update builder
 # ---------------------------------------------------------------------------
@@ -506,6 +775,8 @@ def _build_notion_update(
     page: Dict[str, Any],
     schema_props: Dict[str, Any],
     sent_date: date,
+    sequence_step: str,
+    next_followup_date: Optional[date],
     thread_id: str,
     message_id: str,
 ) -> Dict[str, Any]:
@@ -514,27 +785,29 @@ def _build_notion_update(
 
     Sets:
       Ops Status         → sent
-      Sequence Step      → Email 1 Sent
+      Sequence Step      → inferred sent step
       Gmail Sent Status  → sent
       Gmail Match Status → sent_exists
       Gmail Thread ID    → from Gmail (if available)
       Gmail Message ID   → from Gmail (if field exists in schema)
       Last Outreach Date → Gmail sent date
-      Next Follow-up Date→ sent date + FOLLOWUP_BUSINESS_DAYS business days
+      Next Follow-up Date→ step-specific follow-up date, or cleared for completion
       Scheduled Send Date→ cleared (date → null)
       Gmail Draft ID     → cleared (no longer relevant post-send)
       Blocker Reason     → cleared only if it is a send/draft-side blocker;
                            preserved if it is duplicate/bounce/DNC/CASL related.
     """
     updates: Dict[str, Any] = {}
-    followup_date = _add_business_days(sent_date, FOLLOWUP_BUSINESS_DAYS)
 
     _set_field(updates, schema_props, OPS_STATUS_CANDIDATES, "sent")
-    _set_field(updates, schema_props, SEQUENCE_STEP_CANDIDATES, "Email 1 Sent")
+    _set_field(updates, schema_props, SEQUENCE_STEP_CANDIDATES, sequence_step)
     _set_field(updates, schema_props, GMAIL_SENT_STATUS_CANDIDATES, "sent")
     _set_field(updates, schema_props, GMAIL_MATCH_STATUS_CANDIDATES, "sent_exists")
     _set_field(updates, schema_props, LAST_OUTREACH_DATE_CANDIDATES, sent_date.isoformat())
-    _set_field(updates, schema_props, NEXT_FOLLOW_UP_DATE_CANDIDATES, followup_date.isoformat())
+    if next_followup_date:
+        _set_field(updates, schema_props, NEXT_FOLLOW_UP_DATE_CANDIDATES, next_followup_date.isoformat())
+    else:
+        _clear_date_field(updates, schema_props, NEXT_FOLLOW_UP_DATE_CANDIDATES)
 
     if thread_id:
         _set_field(updates, schema_props, GMAIL_THREAD_ID_CANDIDATES, thread_id)
@@ -568,7 +841,11 @@ def main() -> None:
     print("Gmail Sent-State Reconciliation")
     print(f"  SENT_RECONCILE_DRY_RUN : {'yes — no Notion writes' if DRY_RUN else 'NO — LIVE WRITES ENABLED'}")
     print(f"  Gmail lookback         : {GMAIL_SENT_LOOKBACK_DAYS} days")
-    print(f"  Follow-up offset       : +{FOLLOWUP_BUSINESS_DAYS} business days after sent date")
+    print(
+        f"  Follow-up offsets      : Email 1 +{FOLLOWUP_BUSINESS_DAYS_EMAIL_1} business days,"
+        f" Email 2 +{FOLLOWUP_BUSINESS_DAYS_EMAIL_2} business days,"
+        f" Email 3/Complete clears Next Follow-up Date"
+    )
     print()
 
     schema = get_data_source_schema()
@@ -580,11 +857,29 @@ def main() -> None:
     print()
 
     service = get_gmail_service()
+    allowed_senders = _allowed_sender_emails()
 
     summary: Dict[str, int] = {
         "records_checked": 0,
         "candidates": 0,
+        "historical_raw_sent_found": 0,
+        "rejected_wrong_sender": 0,
+        "rejected_missing_sent_label": 0,
+        "rejected_to_mismatch": 0,
+        "rejected_bounce_signature": 0,
+        "rejected_missing_outreach_signal": 0,
+        "rejected_missing_timestamp": 0,
+        "rejected_outside_lookback": 0,
+        "rejected_unknown": 0,
+        "accepted_historical_outreach": 0,
         "gmail_sent_matches": 0,
+        "subject_match_sent_matches": 0,
+        "historical_sent_matches": 0,
+        "historical_email1_sent": 0,
+        "historical_email2_sent": 0,
+        "historical_email3_sent": 0,
+        "no_subject_historical_match": 0,
+        "no_subject_no_match": 0,
         "would_update": 0,
         "updated": 0,
         "no_match": 0,
@@ -596,7 +891,10 @@ def main() -> None:
         "errors": 0,
     }
     example_log_limit = 10
-    matched_examples: List[str] = []
+    subject_match_examples: List[str] = []
+    historical_match_examples: List[str] = []
+    accepted_historical_examples: List[str] = []
+    historical_rejection_examples: List[str] = []
     no_match_examples: List[str] = []
     skipped_examples: List[str] = []
 
@@ -641,37 +939,113 @@ def main() -> None:
             f" | draft_id: {draft_id or '<none>'} | thread_id: {thread_id or '<none>'}"
         )
 
-        if not email_1_subject:
-            print("    → NO SUBJECT | Email 1 Subject is empty — cannot match Gmail sent mail")
-            if len(no_match_examples) < example_log_limit:
-                no_match_examples.append(f"NO SUBJECT | {name} | {lead_email}")
-            summary["no_match"] += 1
-            continue
-
         try:
-            match = _find_gmail_sent_match(service, lead_email, email_1_subject)
+            sent_messages, diagnostics = _load_sent_candidates(service, lead_email, allowed_senders)
         except Exception as exc:
             print(f"    → ERROR | Gmail search failed: {exc}")
             summary["errors"] += 1
             continue
 
-        if not match:
-            print(
-                f"    → NO MATCH | subject: {email_1_subject[:70]}"
-                f" | no sent message found in last {GMAIL_SENT_LOOKBACK_DAYS} days"
-            )
-            if len(no_match_examples) < example_log_limit:
-                no_match_examples.append(
-                    f"NO MATCH | {name} | {lead_email} | subject={email_1_subject[:70]}"
+        for debug in diagnostics:
+            summary["historical_raw_sent_found"] += 1
+            if not debug.get("sender_match"):
+                summary["rejected_wrong_sender"] += 1
+            reason = str(debug.get("reason", "") or "")
+            if not reason:
+                reason = "rejected_unknown"
+            if reason in summary and reason.startswith("rejected_"):
+                summary[reason] += 1
+            if reason == "accepted_historical_outreach":
+                summary["accepted_historical_outreach"] += 1
+            if not debug.get("accepted") and len(historical_rejection_examples) < example_log_limit:
+                labels = ", ".join(debug.get("labels", [])) or "<none>"
+                historical_rejection_examples.append(
+                    f"{reason or 'rejected_unknown'} | subject={str(debug.get('subject', ''))[:70]} | "
+                    f"from={str(debug.get('from', ''))[:70]} | to={str(debug.get('to', ''))[:70]} | "
+                    f"labels={labels}"
                 )
-            summary["no_match"] += 1
-            continue
 
-        summary["gmail_sent_matches"] += 1
+        subject_match = _find_subject_match(sent_messages, email_1_subject)
+
+        match: Optional[Dict[str, Any]] = None
+        match_kind = ""
+        sequence_step = ""
+        next_followup_date: Optional[date] = None
+        sent_count = 0
+
+        if subject_match:
+            match = subject_match
+            match_kind = "subject"
+            sequence_step = "Email 1 Sent"
+            next_followup_date = _next_followup_for_sequence(match["sent_date"], sequence_step)
+            summary["subject_match_sent_matches"] += 1
+            summary["gmail_sent_matches"] += 1
+            if len(subject_match_examples) < example_log_limit:
+                subject_match_examples.append(
+                    f"SUBJECT MATCH | {name} | {lead_email} | sent={match['sent_date']} | "
+                    f"match={match.get('match_quality', '<unknown>')} | subject={match['subject'][:70]}"
+                )
+        else:
+            historical_matches = sent_messages
+            if historical_matches:
+                sent_count = len(historical_matches)
+                match = historical_matches[0]
+                match_kind = "historical"
+                sequence_step = _sequence_step_from_sent_count(sent_count)
+                next_followup_date = _next_followup_for_sequence(match["sent_date"], sequence_step)
+                summary["historical_sent_matches"] += 1
+                summary["gmail_sent_matches"] += 1
+                if sent_count == 1:
+                    summary["historical_email1_sent"] += 1
+                elif sent_count == 2:
+                    summary["historical_email2_sent"] += 1
+                else:
+                    summary["historical_email3_sent"] += 1
+                if not email_1_subject:
+                    summary["no_subject_historical_match"] += 1
+                if len(historical_match_examples) < example_log_limit:
+                    hit_summary = ", ".join(match.get("signal_hits", [])) or "<none>"
+                    historical_match_examples.append(
+                        f"HISTORICAL MATCH | {name} | {lead_email} | count={sent_count} | "
+                        f"inferred={sequence_step} | sent={match['sent_date']} | "
+                        f"signals={hit_summary} | subject={match['subject'][:70]}"
+                    )
+                if len(accepted_historical_examples) < HISTORICAL_ACCEPTED_EXAMPLE_LIMIT:
+                    accepted_historical_examples.append(
+                        f"ACCEPTED | {name} | to={lead_email} | subject={match['subject'][:70]} | "
+                        f"sent={match['sent_date']} | signal={', '.join(match.get('signal_hits', [])) or '<none>'} | "
+                        f"sequence_count={sent_count}"
+                    )
+            else:
+                if not email_1_subject:
+                    summary["no_subject_no_match"] += 1
+                    print("    → NO SUBJECT | falling back to historical search found no valid outreach message")
+                else:
+                    print(
+                        f"    → NO MATCH | subject: {email_1_subject[:70]}"
+                        f" | no sent message found in last {GMAIL_SENT_LOOKBACK_DAYS} days"
+                    )
+                if len(no_match_examples) < example_log_limit:
+                    if email_1_subject:
+                        no_match_examples.append(
+                            f"NO MATCH | {name} | {lead_email} | subject={email_1_subject[:70]}"
+                        )
+                    else:
+                        no_match_examples.append(f"NO SUBJECT NO MATCH | {name} | {lead_email}")
+                summary["no_match"] += 1
+                continue
+
+        if match_kind == "historical" and not email_1_subject:
+            print("    → HISTORICAL MATCH | no Email 1 Subject present; matched on sent-message signals")
+        elif match_kind == "historical":
+            print("    → HISTORICAL MATCH | Email 1 Subject did not match; matched on sent-message signals")
+        else:
+            print(f"    → SUBJECT MATCH | Email 1 Subject matched via {match.get('match_quality', '<unknown>')}")
+
         sent_date = match["sent_date"]
         matched_thread = match["thread_id"]
         matched_msg = match["message_id"]
-        followup_date = _add_business_days(sent_date, FOLLOWUP_BUSINESS_DAYS)
+        followup_date = next_followup_date
         current_blocker = _prop_text(page, BLOCKER_REASON_CANDIDATES)
         blocker_note = ""
         if current_blocker:
@@ -686,32 +1060,34 @@ def main() -> None:
         match_summary = (
             f"    → MATCH | Gmail sent: {sent_date}"
             f" | subject: {match['subject'][:60]}"
-            f" | match: {match.get('match_quality', '<unknown>')}"
+            f" | step: {sequence_step}"
+            f" | kind: {match_kind}"
             f" | thread: {matched_thread or '<none>'}"
-            f" | followup → {followup_date}"
+            f" | followup → {followup_date.isoformat() if followup_date else '<cleared>'}"
             f"{blocker_note}"
         )
-        if len(matched_examples) < example_log_limit:
-            matched_examples.append(
-                f"MATCH | {name} | {lead_email} | sent={sent_date} | "
-                f"match={match.get('match_quality', '<unknown>')} | subject={match['subject'][:70]}"
-            )
 
         if DRY_RUN:
             summary["would_update"] += 1
             print(match_summary)
             print(
                 f"      WOULD UPDATE"
-                f" → ops: sent | step: Email 1 Sent"
+                f" → ops: sent | step: {sequence_step}"
                 f" | gmail_sent: sent | gmail_match: sent_exists"
-                f" | last_outreach: {sent_date} | next_followup: {followup_date}"
+                f" | last_outreach: {sent_date} | next_followup: {followup_date.isoformat() if followup_date else '<cleared>'}"
                 f" | scheduled_send: clear | draft_id: clear"
             )
             continue
 
         try:
             updates = _build_notion_update(
-                page, schema_props, sent_date, matched_thread, matched_msg
+                page,
+                schema_props,
+                sent_date,
+                sequence_step,
+                followup_date,
+                matched_thread,
+                matched_msg,
             )
             if not updates:
                 print("    → SKIP | no updatable fields found in schema")
@@ -721,9 +1097,9 @@ def main() -> None:
             print(match_summary)
             print(
                 f"      UPDATED"
-                f" → ops: sent | step: Email 1 Sent"
+                f" → ops: sent | step: {sequence_step}"
                 f" | gmail_sent: sent | gmail_match: sent_exists"
-                f" | last_outreach: {sent_date} | next_followup: {followup_date}"
+                f" | last_outreach: {sent_date} | next_followup: {followup_date.isoformat() if followup_date else '<cleared>'}"
                 f" | scheduled_send: clear | draft_id: clear"
             )
         except Exception as exc:
@@ -735,7 +1111,24 @@ def main() -> None:
     for key in (
         "records_checked",
         "candidates",
+        "historical_raw_sent_found",
+        "rejected_wrong_sender",
+        "rejected_missing_sent_label",
+        "rejected_to_mismatch",
+        "rejected_bounce_signature",
+        "rejected_missing_outreach_signal",
+        "rejected_missing_timestamp",
+        "rejected_outside_lookback",
+        "rejected_unknown",
+        "accepted_historical_outreach",
         "gmail_sent_matches",
+        "subject_match_sent_matches",
+        "historical_sent_matches",
+        "historical_email1_sent",
+        "historical_email2_sent",
+        "historical_email3_sent",
+        "no_subject_historical_match",
+        "no_subject_no_match",
         "would_update",
         "updated",
         "no_match",
@@ -748,10 +1141,28 @@ def main() -> None:
     ):
         print(f"  {key}: {summary.get(key, 0)}")
 
-    if matched_examples:
+    if subject_match_examples:
         print()
-        print(f"Matched examples ({len(matched_examples)} shown):")
-        for line in matched_examples:
+        print(f"Subject-match examples ({len(subject_match_examples)} shown):")
+        for line in subject_match_examples:
+            print(f"  {line}")
+
+    if historical_match_examples:
+        print()
+        print(f"Historical-match examples ({len(historical_match_examples)} shown):")
+        for line in historical_match_examples:
+            print(f"  {line}")
+
+    if accepted_historical_examples:
+        print()
+        print(f"Accepted historical examples ({len(accepted_historical_examples)} shown):")
+        for line in accepted_historical_examples:
+            print(f"  {line}")
+
+    if historical_rejection_examples:
+        print()
+        print(f"Historical rejection examples ({len(historical_rejection_examples)} shown):")
+        for line in historical_rejection_examples:
             print(f"  {line}")
 
     if no_match_examples:
