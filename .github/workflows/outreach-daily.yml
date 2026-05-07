@@ -61,5 +61,12 @@ jobs:
       - name: Run lead scraper
         run: python agents/run_lead_scraper.py
 
+      - name: Update outreach Ops Status
+        env:
+          OPS_STATUS_DRY_RUN: "false"
+          ALLOW_RULE_BASED_APPROVAL: "true"
+          ALLOW_LEGACY_STATUS_FALLBACK: "false"
+        run: python agents/update_outreach_ops_status.py
+
       - name: Generate Email 1 drafts
         run: python agents/generate_drafts_from_notion.py
