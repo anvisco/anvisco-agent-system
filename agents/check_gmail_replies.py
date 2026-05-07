@@ -54,6 +54,8 @@ LAST_OUTREACH_DATE_CANDIDATES = ("Last Outreach Date", "Last Email Sent At", "Em
 NEXT_FOLLOW_UP_DATE_CANDIDATES = ("Next Follow-up Date", "Next Follow Up Date")
 SEQUENCE_STEP_CANDIDATES = ("Sequence Step",)
 REPLY_NOTES_CANDIDATES = ("Reply Notes",)
+OPS_STATUS_CANDIDATES = ("Ops Status",)
+BLOCKER_REASON_CANDIDATES = ("Blocker Reason",)
 
 # ---------------------------------------------------------------------------
 # Reply category values
@@ -240,6 +242,9 @@ def _property_update(prop_type: str, value: Any) -> Optional[Dict[str, Any]]:
         return {"checkbox": bool(value)}
     if prop_type == "date":
         return {"date": {"start": str(value)}}
+    if prop_type == "multi_select":
+        names = [str(value)] if isinstance(value, str) else [str(v) for v in value]
+        return {"multi_select": [{"name": n} for n in names if n]}
     return None
 
 
@@ -494,6 +499,11 @@ def _build_category_updates(
         _add_update(updates, schema_properties, GMAIL_MATCH_STATUS_CANDIDATES, "bounced")
         _add_update(updates, schema_properties, REPLY_CATEGORY_CANDIDATES, REPLY_BOUNCE)
         _add_update(updates, schema_properties, REPLY_NOTES_CANDIDATES, REPLY_NOTES_BOUNCE)
+        # Block from future sends/follow-ups: set Ops Status + Blocker Reason.
+        # Sequence Step = "Bounced" is intentionally NOT written — that option is not
+        # guaranteed to exist in Notion. Ops Status = needs_email_research is the blocker.
+        _add_update(updates, schema_properties, OPS_STATUS_CANDIDATES, "needs_email_research")
+        _add_update(updates, schema_properties, BLOCKER_REASON_CANDIDATES, "bounced_email")
 
     elif category == REPLY_OOO:
         _add_update(updates, schema_properties, REPLY_CATEGORY_CANDIDATES, REPLY_OOO)

@@ -361,6 +361,8 @@ def _lead_ready_to_draft(lead: Dict[str, Any]) -> bool:
 def _lead_follow_up_due_status(lead: Dict[str, Any]) -> bool:
     if _lead_has_replied(lead):
         return False
+    if _lead_gmail_match_status(lead) == "bounced":
+        return False
     sequence_step = _lead_sequence_step(lead)
     if sequence_step in {"Email 3 Sent", "Sequence Complete"}:
         return False
@@ -480,6 +482,8 @@ def classify_lead(
 ) -> Classification:
     if _lead_has_replied(lead):
         return Classification("replied", [], "replied")
+    if _lead_gmail_match_status(lead) == "bounced":
+        return Classification("needs_email_research", ["bounced_email"], "bounced_email")
     if _lead_follow_up_due_status(lead):
         return Classification("follow_up_due", [], "follow_up_due")
     if _lead_has_sent(lead):

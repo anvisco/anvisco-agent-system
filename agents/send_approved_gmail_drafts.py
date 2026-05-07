@@ -89,7 +89,7 @@ SCHEDULED_SEND_DATE_CANDIDATES = getattr(draft_flow, "SCHEDULED_SEND_DATE_CANDID
 
 BLOCKED_LEAD_STATUSES = {"not_fit", "archived", "paid_client"}
 BLOCKED_DUPLICATE_STATUSES = {"duplicate", "possible_duplicate", "already_contacted", "do_not_contact"}
-BLOCKED_GMAIL_MATCH_STATUSES = {"sent_exists", "replied"}
+BLOCKED_GMAIL_MATCH_STATUSES = {"sent_exists", "replied", "bounced", "invalid_email"}
 BLOCKED_GMAIL_SENT_STATUSES = {"sent"}
 OPS_READY_TO_SEND = "ready_to_send"
 REQUIRED_SEND_MODE = "auto_send_gated"
@@ -778,6 +778,7 @@ def main() -> None:
         "skipped_ops_status_not_ready_to_send": skipped_ops_status_not_ready_to_send,
         "skipped_missing_scheduled_send_date": 0,
         "skipped_future_scheduled_send_date": 0,
+        "skipped_bounced_or_invalid_email": 0,
         "stale_gmail_draft_id": 0,
         "not_active_draft": 0,
         "errors": 0,
@@ -805,6 +806,8 @@ def main() -> None:
             summary["skipped"] += 1
             for reason in reasons:
                 skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+            if any("Gmail Match Status is bounced" in r or "Gmail Match Status is invalid_email" in r for r in reasons):
+                summary["skipped_bounced_or_invalid_email"] += 1
             print(
                 f"SKIP | {lead_name} | Gmail Draft ID: {draft_id or '<missing>'} | "
                 f"Reasons: {', '.join(reasons)}"

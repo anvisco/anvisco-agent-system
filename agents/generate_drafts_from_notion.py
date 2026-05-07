@@ -1430,6 +1430,8 @@ def query_due_followups() -> List[Dict[str, Any]]:
             continue
         if reply_status == "Replied" or outreach_status in {"Replied", "Closed"}:
             continue
+        if _lead_gmail_match_status(lead) == "bounced":
+            continue
         if follow_up_due_now_property:
             if follow_up_due_now:
                 due.append(lead)
@@ -1628,6 +1630,9 @@ def _process_due_followup(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
     if not ops_status_property and not ALLOW_LEGACY_STATUS_FALLBACK:
         print(f"Skipped {lead_name}: Ops Status is missing and legacy status fallback is disabled")
         return "skipped"
+    if _lead_gmail_match_status(lead) == "bounced":
+        print(f"Skipped {lead_name}: Gmail Match Status is bounced")
+        return "skipped"
 
     if sequence_step == "Email 1 Sent" or outreach_status == "Email 1 Sent" or (lead_status == "outreach_sent" and not sequence_step):
         target_step = "Email 2 Drafted"
@@ -1692,6 +1697,9 @@ def _sync_manual_sent_steps(schema: Dict[str, Any]) -> None:
         sequence_step = _get_text_value(_get_property(lead, sequence_step_property or ""))
         last_outreach = _get_date_value(_get_property(lead, last_outreach_property or ""))
         next_followup = _get_date_value(_get_property(lead, next_followup_property or ""))
+
+        if _lead_gmail_match_status(lead) == "bounced":
+            continue
 
         if (
             sequence_step == "Email 1 Sent"
