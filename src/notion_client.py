@@ -11,8 +11,6 @@ TEST_LEAD = {
     "Practice Name": "TEST Dental Clinic",
     "Website": "https://example.com",
     "Email": "test@example.com",
-    "Lead Status": "audit_ready",
-    "Source": "Codex Notion Test",
 }
 
 
@@ -159,13 +157,9 @@ def update_test_lead() -> Optional[Dict[str, Any]]:
 
     client = get_client()
     page_id = existing[0]["id"]
-    schema = get_data_source_schema()
-    source_properties = schema.get("properties", schema)
-    source_type = source_properties.get("Source", {}).get("type")
-    source_value = _property_value("Source", source_type, "Codex Notion Test")
-    if source_value is None:
-        raise ValueError("Source property must be select, rich_text, or title.")
-    properties = {"Source": source_value}
+    properties, skipped = build_properties(TEST_LEAD)
+    if skipped:
+        print(f"Skipping unsupported or missing properties: {', '.join(skipped)}")
 
     if settings.dry_run:
         print(f"DRY RUN: would update lead: {TEST_LEAD['Practice Name']}")

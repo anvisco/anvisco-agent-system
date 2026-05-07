@@ -12,7 +12,6 @@ from .notion_writer import (
     EARLY_STAGE,
     find_duplicate,
     find_duplicate_by_keys,
-    ensure_source_option,
     load_existing_leads,
     should_skip_recent_good_record,
     update_existing_lead,
@@ -42,10 +41,6 @@ def _is_valid_for_write(audited: AuditedLead) -> tuple[bool, str]:
         return False, "missing audit summary"
     if not audited.angle_bucket:
         return False, "missing angle bucket"
-    if not audited.google_place_id:
-        return False, "missing Google Place ID"
-    if audited.lead_quality_score < settings.min_lead_score:
-        return False, f"low score ({audited.lead_quality_score})"
     return True, ""
 
 
@@ -98,7 +93,6 @@ def _city_metrics_line(logger: DailyLogger, accepted_count: int, active_city: st
 def _skip_duplicate_if_needed(found: FoundLead, existing_pages: list[Dict[str, Any]], logger: DailyLogger) -> bool:
     domain = normalize_domain(found.website)
     duplicate = find_duplicate_by_keys(
-        google_place_id=found.google_place_id,
         domain=domain,
         phone=found.phone,
         business_name=found.business_name,
@@ -168,8 +162,6 @@ def run_daily_scrape() -> None:
     try:
         existing_pages, data_source, data_source_id = load_existing_leads()
         schema_properties = data_source.get("properties", {})
-        if not settings.dry_run:
-            ensure_source_option(schema_properties, data_source_id)
     except Exception as exc:
         logger.error("Notion", f"Could not load existing leads: {exc}")
         logger.write()
@@ -231,8 +223,6 @@ def run_daily_scrape() -> None:
                 logger.count("duplicates_found")
             valid, reason = _is_valid_for_write(audited)
             if not valid:
-                if reason.startswith("low score"):
-                    logger.count("low_score_skipped")
                 logger.skip(audited.business_name, audited.domain, reason)
                 continue
 

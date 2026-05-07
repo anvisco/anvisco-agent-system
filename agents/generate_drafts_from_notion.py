@@ -68,15 +68,11 @@ EMAIL_3_SUBJECT_CANDIDATES = ["Email 3 Subject"]
 EMAIL_3_DRAFT_CANDIDATES = ["Email 3 Draft"]
 DRAFT_CREATED_DATE_CANDIDATES = ["Draft Created Date"]
 EMAIL_1_DATE_CANDIDATES = ["Email 1 Date"]
-TIER_CANDIDATES = ["Tier"]
 TOP_ISSUE_CANDIDATES = ["Top 3 Issues", "Top Issue"]
 OUTREACH_ANGLE_CANDIDATES = ["Email Angle", "Outreach Angle"]
 WEBSITE_CANDIDATES = ["Website"]
 RECOMMENDED_OFFER_CANDIDATES = ["Recommended Offer"]
-LEAD_QUALITY_SCORE_CANDIDATES = ["Lead Quality Score"]
 ANGLE_BUCKET_CANDIDATES = ["Angle Bucket"]
-LOOM_RECOMMENDED_CANDIDATES = ["Loom Recommended"]
-LOOM_SCRIPT_CANDIDATES = ["Loom Script"]
 SEQUENCE_STEP_CANDIDATES = ["Sequence Step"]
 LAST_OUTREACH_DATE_CANDIDATES = ["Last Outreach Date", "Last Email Sent At"]
 NEXT_FOLLOW_UP_DATE_CANDIDATES = ["Next Follow-up Date", "Next Follow Up Date"]
@@ -102,7 +98,6 @@ ADMIN_APPROVED_CANDIDATES = ["Admin Approved"]
 CASL_BASIS_CANDIDATES = ["CASL Basis"]
 SEND_MODE_CANDIDATES = ["Send Mode"]
 AUTO_SEND_ELIGIBLE_CANDIDATES = ["Auto-Send Eligible"]
-LAST_EMAIL_DRAFTED_AT_CANDIDATES = ["Last Email Drafted At"]
 LAST_EMAIL_SENT_AT_CANDIDATES = ["Last Outreach Date", "Last Email Sent At"]
 FOLLOW_UP_DUE_NOW_CANDIDATES = ["Follow-Up Due Now"]
 SCHEDULED_SEND_DATE_CANDIDATES = ["Scheduled Send Date"]
@@ -837,15 +832,6 @@ def _append_scrape_note_update(schema: Dict[str, Any], lead: Dict[str, Any], not
     return {scrape_notes_property: update_value} if update_value else {}
 
 
-def _lead_quality_score(lead: Dict[str, Any]) -> int:
-    score_property = _first_existing_property_name(lead.get("properties", {}), LEAD_QUALITY_SCORE_CANDIDATES)
-    raw_score = _get_text_value(_get_property(lead, score_property or ""))
-    try:
-        return int(float(raw_score))
-    except ValueError:
-        return 0
-
-
 def _missing_email_1_fields(lead: Dict[str, Any]) -> List[str]:
     missing: List[str] = []
     properties = lead.get("properties", {})
@@ -1235,38 +1221,6 @@ def update_notion_lead(page_id: str, updates: Dict[str, Any]) -> None:
     client.pages.update(page_id=page_id, properties=updates)
 
 
-def infer_tier_from_top_issue(top_issue: str) -> str:
-    normalized = top_issue.lower()
-    hot_keywords = (
-        "broken",
-        "no website",
-        "expired",
-        "severe",
-        "not working",
-        "old covid",
-        "outdated",
-        "missing booking",
-        "weak booking",
-        "no clear patient journey",
-    )
-    warm_keywords = (
-        "multilingual",
-        "translation",
-        "confusing",
-        "content-heavy",
-        "slow",
-        "mobile",
-        "high-value",
-        "service organization",
-    )
-
-    if any(keyword in normalized for keyword in hot_keywords):
-        return "HOT"
-    if any(keyword in normalized for keyword in warm_keywords):
-        return "WARM"
-    return "COOL"
-
-
 def _next_monday_date(today: Optional[date] = None) -> date:
     """Return the next Monday on or after today (same day if today is Monday)."""
     ref = today or datetime.now(timezone.utc).date()
@@ -1306,9 +1260,6 @@ def build_email_1_sequence_updates(
     _add_update(updates, properties, ANGLE_BUCKET_CANDIDATES, _sequence_angle_bucket(sequence))
     _add_update_if_empty(updates, properties, lead, OUTREACH_ANGLE_CANDIDATES, sequence["outreach_angle"])
     _add_update_if_empty(updates, properties, lead, RECOMMENDED_OFFER_CANDIDATES, sequence["recommended_offer"])
-    _add_update(updates, properties, LOOM_RECOMMENDED_CANDIDATES, sequence["loom_recommended"])
-    if sequence["loom_script"]:
-        _add_update(updates, properties, LOOM_SCRIPT_CANDIDATES, sequence["loom_script"])
     _add_update_if_empty(updates, properties, lead, SUBJECT_ANGLE_CANDIDATES, sequence["subject_angle"])
     _add_update_if_empty(updates, properties, lead, CLINIC_STRENGTHS_CANDIDATES, sequence["clinic_strengths"])
     _add_update_if_empty(updates, properties, lead, STRONGEST_ADVANTAGE_CANDIDATES, sequence["strongest_advantage"])
@@ -1322,16 +1273,6 @@ def build_email_1_sequence_updates(
         _add_update(updates, properties, SEND_MODE_CANDIDATES, settings.send_mode)
         _add_update(updates, properties, AUTO_SEND_ELIGIBLE_CANDIDATES, auto_send_eligible)
 
-    tier_property = _first_existing_property_name(properties, TIER_CANDIDATES)
-    top_issue_property = _first_existing_property_name(properties, TOP_ISSUE_CANDIDATES)
-    if tier_property and top_issue_property and not _get_text_value(_get_property(lead, tier_property)):
-        tier_type = properties[tier_property].get("type")
-        inferred_tier = infer_tier_from_top_issue(sequence["top_issue"])
-        if tier_type == "select":
-            updates[tier_property] = {"select": {"name": inferred_tier}}
-        elif tier_type == "rich_text":
-            updates[tier_property] = {"rich_text": [{"type": "text", "text": {"content": inferred_tier}}]}
-
     if draft_id:
         _add_update(updates, properties, GMAIL_DRAFT_ID_CANDIDATES, draft_id)
         if thread_id:
@@ -1341,7 +1282,6 @@ def build_email_1_sequence_updates(
             _add_update(updates, properties, ["Lead Status"], "outreach_drafted")
         elif write_legacy_fields:
             _add_update(updates, properties, OUTREACH_STATUS_FIELD_CANDIDATES, "draft_ready")
-        _add_update(updates, properties, LAST_EMAIL_DRAFTED_AT_CANDIDATES, datetime.now(timezone.utc).date().isoformat())
         scheduled_send = _next_monday_date()
         _add_update(updates, properties, SCHEDULED_SEND_DATE_CANDIDATES, scheduled_send.isoformat())
         _add_update(updates, properties, OUTREACH_BATCH_CANDIDATES, _outreach_batch_id(scheduled_send))

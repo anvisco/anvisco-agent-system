@@ -21,8 +21,6 @@ REQUIRED_FOR_DRAFT = (
 TOP_ISSUE_CANDIDATES = ("Top 3 Issues", "Top Issue")
 EMAIL_ANGLE_CANDIDATES = ("Email Angle", "Outreach Angle")
 DUPLICATE_KEYS = ("Domain", "Email", "Phone")
-LEAD_STATUS_CANDIDATES = ("Lead Status", "Outreach Status")
-AUDIT_STATUS_CANDIDATES = ("Audit Status",)
 
 
 def get_client() -> Client:
@@ -83,14 +81,6 @@ def _field_value(page: Dict[str, Any], field: str, title_property: str) -> str:
     return _text(properties.get(field, {}))
 
 
-def _score(page: Dict[str, Any]) -> int:
-    raw = _text(page.get("properties", {}).get("Lead Quality Score", {}))
-    try:
-        return int(float(raw))
-    except ValueError:
-        return 0
-
-
 def _load_pages(data_source_id: str) -> list[Dict[str, Any]]:
     client = get_client()
     pages: list[Dict[str, Any]] = []
@@ -143,11 +133,9 @@ def main() -> None:
     skipped_count = 0
     for page in pages:
         properties = page.get("properties", {})
-        lead_status_field = _first_existing(properties, LEAD_STATUS_CANDIDATES)
-        audit_status_field = _first_existing(properties, AUDIT_STATUS_CANDIDATES)
-        lead_status = _text(properties.get(lead_status_field or "", {})).lower()
-        audit_status = _text(properties.get(audit_status_field or "", {})).lower()
-        if lead_status not in {"audit_ready", "outreach_drafted", "draft_ready", "new lead", "draft ready"} and audit_status != "complete":
+        ops_status_field = _first_existing(properties, ("Ops Status",))
+        ops_status = _text(properties.get(ops_status_field or "", {})).lower()
+        if ops_status != "ready_to_draft":
             continue
         new_lead_count += 1
         name = _field_value(page, "Business Name", title_property) or page["id"]
@@ -156,8 +144,6 @@ def main() -> None:
             missing.append("Top 3 Issues")
         if not any(_field_value(page, field, title_property) for field in EMAIL_ANGLE_CANDIDATES):
             missing.append("Email Angle")
-        if _score(page) < 3:
-            missing.append("Lead Quality Score >= 3")
         if missing:
             skipped_count += 1
             print(f"SKIP | {name} | missing/invalid: {', '.join(missing)}")

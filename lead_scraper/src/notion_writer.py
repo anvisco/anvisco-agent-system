@@ -7,7 +7,7 @@ from notion_client import Client
 
 from .config import settings
 from .models import AuditedLead
-from .utils import append_note, clean_phone, is_probably_better_text, normalize_domain, now_iso_date
+from .utils import append_note, clean_phone, is_probably_better_text, normalize_domain
 
 
 CONTACTED_OR_CLOSED = {
@@ -22,13 +22,10 @@ CONTACTED_OR_CLOSED = {
     "not_fit",
 }
 EARLY_STAGE = {"New Lead", "Draft Ready", "audit_ready", "draft_ready", "outreach_drafted"}
-SOURCE_GOOGLE_PLACES_NEW = "Google Places New"
-AUDIT_STATUS_CANDIDATES = ("Audit Status",)
 MISSING_SCHEMA_FIELDS_LOGGED: set[str] = set()
 
 
 FIELD_MAP = {
-    "Google Place ID": "google_place_id",
     "Business Name": "business_name",
     "Country": "country",
     "Province": "province",
@@ -39,19 +36,14 @@ FIELD_MAP = {
     "Email": "email",
     "Phone": "phone",
     "Address": "address",
-    "Google Maps URL": "google_maps_url",
     "Rating": "rating",
     "Review Count": "review_count",
     "Top Issue": "top_issue",
     "Outreach Angle": "outreach_angle",
     "Angle Bucket": "angle_bucket",
     "Recommended Offer": "recommended_offer",
-    "Lead Quality Score": "lead_quality_score",
     "Website Status": "website_status",
-    "Source": "source",
-    "Last Scraped Date": None,
     "Scrape Notes": "scrape_notes",
-    "Audit Status": None,
     "Subject Angle": "subject_angle",
     "Clinic Strengths": "clinic_strengths",
     "Strongest Advantage": "strongest_advantage",
@@ -61,15 +53,11 @@ FIELD_MAP = {
     "Recommended Fix": "recommended_fix",
     "Email Angle": "email_angle",
     "Loom Link": "loom_link",
-    "Send Mode": "send_mode",
-    "Auto-Send Eligible": "auto_send_eligible",
     "Duplicate Status": "duplicate_status",
-    "Duplicate Reason": "duplicate_reason",
     "Gmail Match Status": "gmail_match_status",
     "Gmail Draft ID": "gmail_draft_id",
     "Gmail Thread ID": "gmail_thread_id",
     "Gmail Sent Status": "gmail_sent_status",
-    "Admin Approved": "admin_approved",
     "CASL Basis": "casl_basis",
     "Contact Page URL": "contact_page_url",
     "Booking URL": "booking_url",
@@ -195,51 +183,21 @@ def load_existing_leads() -> tuple[list[Dict[str, Any]], Dict[str, Any], str]:
     return leads, data_source, data_source_id
 
 
-def ensure_source_option(schema_properties: Dict[str, Any], data_source_id: str) -> None:
-    source_property = schema_properties.get("Source", {})
-    if source_property.get("type") != "select":
-        return
-    existing_options = source_property.get("select", {}).get("options", [])
-    if any(option.get("name") == SOURCE_GOOGLE_PLACES_NEW for option in existing_options):
-        return
-
-    updated_options = [
-        {"name": option.get("name", ""), "color": option.get("color", "default")}
-        for option in existing_options
-        if option.get("name")
-    ]
-    updated_options.append({"name": SOURCE_GOOGLE_PLACES_NEW, "color": "default"})
-    get_client().data_sources.update(
-        data_source_id=data_source_id,
-        properties={
-            "Source": {
-                "select": {
-                    "options": updated_options,
-                }
-            }
-        },
-    )
-
-
 def _lead_key_values(page: Dict[str, Any]) -> Dict[str, str]:
     props = page.get("properties", {})
     ops_status = _plain_text(props.get("Ops Status", {}))
     lead_status = _plain_text(props.get("Lead Status", {}))
     outreach_status = _plain_text(props.get("Outreach Status", {}))
     return {
-        "google_place_id": _plain_text(props.get("Google Place ID", {})),
         "domain": normalize_domain(_plain_text(props.get("Domain", {})) or _plain_text(props.get("Website", {}))),
         "phone": clean_phone(_plain_text(props.get("Phone", {}))),
         "name_address": f"{_plain_text(props.get('Business Name', {})).lower()}|{_plain_text(props.get('Address', {})).lower()}",
         "status": ops_status or lead_status or outreach_status,
-        "last_scraped": _plain_text(props.get("Last Scraped Date", {})),
-        "score": _plain_text(props.get("Lead Quality Score", {})),
     }
 
 
 def find_duplicate(audited: AuditedLead, existing_pages: list[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return find_duplicate_by_keys(
-        google_place_id=audited.google_place_id,
         domain=audited.domain,
         phone=audited.phone,
         business_name=audited.business_name,
@@ -249,22 +207,18 @@ def find_duplicate(audited: AuditedLead, existing_pages: list[Dict[str, Any]]) -
 
 
 def find_duplicate_by_keys(
-    google_place_id: str,
     domain: str,
     phone: str,
     business_name: str,
     address: str,
     existing_pages: list[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
-    target_google_place_id = google_place_id.strip()
     target_domain = normalize_domain(domain)
     target_phone = clean_phone(phone)
     target_name_address = f"{business_name.lower()}|{address.lower()}"
-    for key in ("google_place_id", "domain", "phone", "name_address"):
+    for key in ("domain", "phone", "name_address"):
         for page in existing_pages:
             values = _lead_key_values(page)
-            if key == "google_place_id" and target_google_place_id and values[key] == target_google_place_id:
-                return page
             if key == "domain" and target_domain and values[key] == target_domain:
                 return page
             if key == "phone" and target_phone and values[key] == target_phone:
@@ -275,12 +229,11 @@ def find_duplicate_by_keys(
 
 
 def should_skip_recent_good_record(page: Dict[str, Any]) -> bool:
-    values = _lead_key_values(page)
-    last_scraped = values.get("last_scraped")
-    if not last_scraped:
+    last_edited = page.get("last_edited_time", "")
+    if not last_edited:
         return False
     try:
-        scraped_date = date.fromisoformat(last_scraped[:10])
+        scraped_date = date.fromisoformat(str(last_edited)[:10])
     except ValueError:
         return False
     has_good_data = bool(
@@ -309,8 +262,6 @@ def _build_create_properties(audited: AuditedLead, schema_properties: Dict[str, 
         value = getattr(audited, attr) if attr else None
         if notion_field == "Business Name":
             value = audited.business_name
-        elif notion_field == "Last Scraped Date":
-            value = now_iso_date()
         property_name = title_property if notion_field == "Business Name" and title_property != notion_field else notion_field
         prop_info = schema_properties.get(property_name)
         if not prop_info:
@@ -318,11 +269,6 @@ def _build_create_properties(audited: AuditedLead, schema_properties: Dict[str, 
         notion_value = _property_value(prop_info["type"], value)
         if notion_value:
             props[property_name] = notion_value
-    audit_status_property = _first_existing_property_name(schema_properties, AUDIT_STATUS_CANDIDATES)
-    if audit_status_property and audit_status_property not in props:
-        notion_value = _property_value(schema_properties[audit_status_property]["type"], "complete")
-        if notion_value:
-            props[audit_status_property] = notion_value
     if title_property not in props:
         props[title_property] = _property_value(schema_properties[title_property]["type"], audited.business_name) or {}
     return props
@@ -340,15 +286,13 @@ def _build_update_properties(page: Dict[str, Any], audited: AuditedLead, schema_
             continue
         incoming = getattr(audited, attr) if attr else None
         property_name = title_property if notion_field == "Business Name" and title_property != notion_field else notion_field
-        if notion_field == "Last Scraped Date":
-            incoming = now_iso_date()
         if notion_field == "Scrape Notes":
             current = _plain_text(existing_props.get(property_name, {}))
             incoming = append_note(current, audited.scrape_notes)
         current = _plain_text(existing_props.get(property_name, {}))
         if notion_field in {"Top Issue", "Top 3 Issues", "Outreach Angle", "Email Angle"} and not is_probably_better_text(current, str(incoming or "")):
             continue
-        elif notion_field not in {"Top Issue", "Top 3 Issues", "Outreach Angle", "Email Angle", "Last Scraped Date", "Scrape Notes"} and current:
+        elif notion_field not in {"Top Issue", "Top 3 Issues", "Outreach Angle", "Email Angle", "Scrape Notes"} and current:
             continue
         notion_value = _property_value(schema_properties[property_name]["type"], incoming)
         if notion_value:

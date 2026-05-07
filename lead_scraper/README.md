@@ -61,12 +61,12 @@ python agents/run_lead_scraper.py
 2. Stay within Canada.
 3. Skip records with no website.
 4. Normalize domains for deduplication.
-5. Check existing Notion records by place ID, domain, phone, and name plus city.
+5. Check existing Notion records by domain, phone, and name plus city.
 6. Skip contacted or closed duplicates.
 7. Enrich early-stage duplicates when new data is better.
 8. Scrape homepage and likely contact/about/team/services pages.
 9. Visit the homepage plus common contact/about pages to extract email, phone, booking URL, services, languages, and social links.
-10. Generate `Top Issue`, `Outreach Angle`, `Recommended Offer`, and `Lead Quality Score`.
+10. Generate `Top Issue`, `Outreach Angle`, and `Recommended Offer`.
 11. Continue processing until `MAX_NEW_LEADS_PER_RUN` accepted leads are inserted/enriched, `MAX_TOTAL_CANDIDATES` is reached, or the candidate pool is exhausted.
 12. Write qualified leads into Notion intake fields.
 13. Write a run log to `logs/lead_scraper_YYYY-MM-DD.log`.
@@ -110,14 +110,10 @@ Expected fields:
 - Email
 - Phone
 - Address
-- Google Maps URL
 - Rating
 - Review Count
 - Top Issue
 - Outreach Angle
 - Recommended Offer
-- Lead Quality Score
 - Website Status
-- Source
-- Last Scraped Date
 - Scrape Notes
