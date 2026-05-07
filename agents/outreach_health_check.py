@@ -493,6 +493,12 @@ def _load_city_queue_rows() -> Tuple[List[Dict[str, Any]], bool, Optional[str]]:
         client = get_client()
         queue_database_id = _city_queue_database_id()
         if queue_database_id:
+            # The env var may hold a data_source ID (new API) or a classic database ID.
+            # Try direct data_source query first; fall back to database → data_sources path.
+            try:
+                return _query_data_source_rows(client, queue_database_id), True, None
+            except Exception:
+                pass
             database = client.databases.retrieve(database_id=queue_database_id)
             data_sources = database.get("data_sources", [])
             if not data_sources:
@@ -503,22 +509,22 @@ def _load_city_queue_rows() -> Tuple[List[Dict[str, Any]], bool, Optional[str]]:
         if search is None:
             return [], False, "Canada City Queue not accessible. Share the database with the integration or set ACTIVE_CITY env manually."
 
-        response = search(query=CANADA_CITY_QUEUE_TITLE, filter={"property": "object", "value": "database"})
-        database_id = ""
-        for result in response.get("results", []):
-            title_parts = result.get("title", [])
-            title_text = "".join(part.get("plain_text", "") for part in title_parts).strip()
-            if title_text.lower() == CANADA_CITY_QUEUE_TITLE.lower():
-                database_id = result.get("id", "")
-                break
-        if not database_id:
-            return [], False, "Canada City Queue not accessible. Share the database with the integration or set ACTIVE_CITY env manually."
+        # "database" filter is not valid in this API version; use "data_source".
+        data_source_id = ""
+        try:
+            response = search(query=CANADA_CITY_QUEUE_TITLE, filter={"property": "object", "value": "data_source"})
+            for result in response.get("results", []):
+                title_parts = result.get("title", [])
+                title_text = "".join(part.get("plain_text", "") for part in title_parts).strip()
+                if title_text.lower() == CANADA_CITY_QUEUE_TITLE.lower():
+                    data_source_id = result.get("id", "")
+                    break
+        except Exception:
+            pass
 
-        database = client.databases.retrieve(database_id=database_id)
-        data_sources = database.get("data_sources", [])
-        if not data_sources:
+        if not data_source_id:
             return [], False, "Canada City Queue not accessible. Share the database with the integration or set ACTIVE_CITY env manually."
-        return _query_data_source_rows(client, data_sources[0]["id"]), True, None
+        return _query_data_source_rows(client, data_source_id), True, None
     except Exception:
         return [], False, "Canada City Queue not accessible. Share the database with the integration or set ACTIVE_CITY env manually."
 

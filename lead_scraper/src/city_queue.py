@@ -136,7 +136,16 @@ def resolve_canada_city_queue_context() -> CityQueueContext:
     try:
         queue_database_id = _queue_database_id()
         if queue_database_id:
-            database, data_source_id = get_database_and_data_source_by_id(queue_database_id)
+            # The env var may hold a data_source ID (new API) or a classic database ID.
+            # Try direct data_source query first; fall back to the database → data_sources path.
+            data_source_id = ""
+            try:
+                client.data_sources.retrieve(data_source_id=queue_database_id)
+                data_source_id = queue_database_id
+            except Exception:
+                pass
+            if not data_source_id:
+                _, data_source_id = get_database_and_data_source_by_id(queue_database_id)
         else:
             search = getattr(client, "search", None)
             if search is None:
@@ -144,19 +153,22 @@ def resolve_canada_city_queue_context() -> CityQueueContext:
                     return _environment_fallback_context(warning)
                 raise ValueError(warning)
 
-            response = search(query=CANADA_CITY_QUEUE_TITLE, filter={"property": "object", "value": "database"})
-            database_id = ""
-            for result in response.get("results", []):
-                title_parts = result.get("title", [])
-                title_text = "".join(part.get("plain_text", "") for part in title_parts).strip()
-                if title_text.lower() == CANADA_CITY_QUEUE_TITLE.lower():
-                    database_id = result.get("id", "")
-                    break
-            if not database_id:
+            # "database" filter is not valid in this API version; use "data_source".
+            data_source_id = ""
+            try:
+                response = search(query=CANADA_CITY_QUEUE_TITLE, filter={"property": "object", "value": "data_source"})
+                for result in response.get("results", []):
+                    title_parts = result.get("title", [])
+                    title_text = "".join(part.get("plain_text", "") for part in title_parts).strip()
+                    if title_text.lower() == CANADA_CITY_QUEUE_TITLE.lower():
+                        data_source_id = result.get("id", "")
+                        break
+            except Exception:
+                pass
+            if not data_source_id:
                 if _environment_fallback_enabled():
                     return _environment_fallback_context(warning)
                 raise ValueError(warning)
-            database, data_source_id = get_database_and_data_source_by_id(database_id)
 
         rows = _data_source_rows(client, data_source_id)
         active_rows = [

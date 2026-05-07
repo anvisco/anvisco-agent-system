@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.utils import getaddresses, parseaddr
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -85,6 +85,7 @@ SEQUENCE_STEP_CANDIDATES = draft_flow.SEQUENCE_STEP_CANDIDATES
 LAST_EMAIL_SENT_AT_CANDIDATES = draft_flow.LAST_EMAIL_SENT_AT_CANDIDATES
 LAST_OUTREACH_DATE_CANDIDATES = draft_flow.LAST_OUTREACH_DATE_CANDIDATES
 NEXT_FOLLOW_UP_DATE_CANDIDATES = draft_flow.NEXT_FOLLOW_UP_DATE_CANDIDATES
+SCHEDULED_SEND_DATE_CANDIDATES = getattr(draft_flow, "SCHEDULED_SEND_DATE_CANDIDATES", ["Scheduled Send Date"])
 
 BLOCKED_LEAD_STATUSES = {"not_fit", "archived", "paid_client"}
 BLOCKED_DUPLICATE_STATUSES = {"duplicate", "possible_duplicate", "already_contacted", "do_not_contact"}
@@ -189,6 +190,10 @@ def _lead_admin_approved(lead: Dict[str, Any]) -> bool:
 
 def _lead_website(lead: Dict[str, Any]) -> str:
     return _lead_property_text(lead, draft_flow.WEBSITE_CANDIDATES)  # type: ignore[attr-defined]
+
+
+def _lead_scheduled_send_date(lead: Dict[str, Any]) -> str:
+    return _lead_property_text(lead, SCHEDULED_SEND_DATE_CANDIDATES)
 
 
 def _lead_country(lead: Dict[str, Any]) -> str:
@@ -747,6 +752,8 @@ def main() -> None:
         "sent_label_apply_failed": 0,
         "skipped": 0,
         "skipped_ops_status_not_ready_to_send": skipped_ops_status_not_ready_to_send,
+        "skipped_missing_scheduled_send_date": 0,
+        "skipped_future_scheduled_send_date": 0,
         "stale_gmail_draft_id": 0,
         "not_active_draft": 0,
         "errors": 0,
@@ -779,6 +786,31 @@ def main() -> None:
                 f"Reasons: {', '.join(reasons)}"
             )
             continue
+
+        # Scheduled Send Date gate — required when Ops Status controls the send queue.
+        if ops_status_property:
+            ssd_raw = _lead_scheduled_send_date(lead)
+            if not ssd_raw:
+                summary["skipped"] += 1
+                summary["skipped_missing_scheduled_send_date"] += 1
+                skip_reasons["skipped_missing_scheduled_send_date"] = skip_reasons.get("skipped_missing_scheduled_send_date", 0) + 1
+                print(f"SKIP | {lead_name} | Gmail Draft ID: {draft_id or '<missing>'} | Reasons: skipped_missing_scheduled_send_date")
+                continue
+            try:
+                ssd = date.fromisoformat(ssd_raw[:10])
+                today = datetime.now(timezone.utc).date()
+                if ssd > today:
+                    summary["skipped"] += 1
+                    summary["skipped_future_scheduled_send_date"] += 1
+                    skip_reasons["skipped_future_scheduled_send_date"] = skip_reasons.get("skipped_future_scheduled_send_date", 0) + 1
+                    print(f"SKIP | {lead_name} | Gmail Draft ID: {draft_id or '<missing>'} | Scheduled Send Date: {ssd} | Reasons: skipped_future_scheduled_send_date")
+                    continue
+            except (ValueError, TypeError):
+                summary["skipped"] += 1
+                summary["skipped_missing_scheduled_send_date"] += 1
+                skip_reasons["skipped_missing_scheduled_send_date"] = skip_reasons.get("skipped_missing_scheduled_send_date", 0) + 1
+                print(f"SKIP | {lead_name} | Gmail Draft ID: {draft_id or '<missing>'} | Reasons: skipped_missing_scheduled_send_date (invalid: {ssd_raw!r})")
+                continue
 
         if approval_path == "ops":
             summary["approved_by_ops"] += 1

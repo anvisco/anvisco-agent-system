@@ -105,6 +105,8 @@ AUTO_SEND_ELIGIBLE_CANDIDATES = ["Auto-Send Eligible"]
 LAST_EMAIL_DRAFTED_AT_CANDIDATES = ["Last Email Drafted At"]
 LAST_EMAIL_SENT_AT_CANDIDATES = ["Last Outreach Date", "Last Email Sent At"]
 FOLLOW_UP_DUE_NOW_CANDIDATES = ["Follow-Up Due Now"]
+SCHEDULED_SEND_DATE_CANDIDATES = ["Scheduled Send Date"]
+OUTREACH_BATCH_CANDIDATES = ["Outreach Batch"]
 CITY_CANDIDATES = ["City"]
 NICHE_CANDIDATES = ["Niche"]
 SERVICES_CANDIDATES = ["Services"]
@@ -1264,6 +1266,19 @@ def infer_tier_from_top_issue(top_issue: str) -> str:
     return "COOL"
 
 
+def _next_monday_date(today: Optional[date] = None) -> date:
+    """Return the next Monday on or after today (same day if today is Monday)."""
+    ref = today or datetime.now(timezone.utc).date()
+    days_ahead = (0 - ref.weekday()) % 7  # 0 = Monday; 0 means ref is already Monday
+    return ref + timedelta(days=days_ahead)
+
+
+def _outreach_batch_id(send_date: date) -> str:
+    """Return ISO-week batch label like 2026-W19 for the given scheduled send date."""
+    iso_year, iso_week, _ = send_date.isocalendar()
+    return f"{iso_year}-W{iso_week:02d}"
+
+
 def build_email_1_sequence_updates(
     schema: Dict[str, Any],
     lead: Dict[str, Any],
@@ -1324,6 +1339,9 @@ def build_email_1_sequence_updates(
         else:
             _add_update(updates, properties, OUTREACH_STATUS_FIELD_CANDIDATES, "draft_ready")
         _add_update(updates, properties, LAST_EMAIL_DRAFTED_AT_CANDIDATES, datetime.now(timezone.utc).date().isoformat())
+        scheduled_send = _next_monday_date()
+        _add_update(updates, properties, SCHEDULED_SEND_DATE_CANDIDATES, scheduled_send.isoformat())
+        _add_update(updates, properties, OUTREACH_BATCH_CANDIDATES, _outreach_batch_id(scheduled_send))
 
     if sent_message_id:
         _add_update(updates, properties, GMAIL_THREAD_ID_CANDIDATES, thread_id or sent_message_id)
@@ -1350,6 +1368,9 @@ def build_followup_updates(
     if thread_id:
         _add_update(updates, properties, GMAIL_THREAD_ID_CANDIDATES, thread_id)
     _add_update(updates, properties, SEQUENCE_STEP_CANDIDATES, step_name)
+    scheduled_send = _next_monday_date()
+    _add_update(updates, properties, SCHEDULED_SEND_DATE_CANDIDATES, scheduled_send.isoformat())
+    _add_update(updates, properties, OUTREACH_BATCH_CANDIDATES, _outreach_batch_id(scheduled_send))
     return updates
 
 

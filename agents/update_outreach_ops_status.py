@@ -77,6 +77,8 @@ OUTREACH_ANGLE_CANDIDATES = tuple(draft_flow.OUTREACH_ANGLE_CANDIDATES)  # type:
 NEXT_FOLLOW_UP_CANDIDATES = tuple(draft_flow.NEXT_FOLLOW_UP_DATE_CANDIDATES)  # type: ignore[attr-defined]
 FOLLOW_UP_DUE_NOW_CANDIDATES = tuple(draft_flow.FOLLOW_UP_DUE_NOW_CANDIDATES)  # type: ignore[attr-defined]
 ADMIN_APPROVED_CANDIDATES = tuple(getattr(send_flow, "ADMIN_APPROVED_CANDIDATES", ("Admin Approved",)))
+SCHEDULED_SEND_DATE_CANDIDATES = tuple(getattr(draft_flow, "SCHEDULED_SEND_DATE_CANDIDATES", ("Scheduled Send Date",)))
+OUTREACH_BATCH_CANDIDATES = tuple(getattr(draft_flow, "OUTREACH_BATCH_CANDIDATES", ("Outreach Batch",)))
 
 CANADA_COUNTRY = "canada"
 APPROVED_SEND_MODES = {"auto_draft", "auto_send_gated"}
@@ -281,6 +283,10 @@ def _lead_next_follow_up(lead: Dict[str, Any]) -> Optional[date]:
     return _lead_date(lead, NEXT_FOLLOW_UP_CANDIDATES)
 
 
+def _lead_scheduled_send_date(lead: Dict[str, Any]) -> Optional[date]:
+    return _lead_date(lead, SCHEDULED_SEND_DATE_CANDIDATES)
+
+
 def _lead_has_replied(lead: Dict[str, Any]) -> bool:
     return (
         _lead_status(lead) in REPLIED_STATUS_VALUES
@@ -302,7 +308,11 @@ def _lead_is_missing_required_content(lead: Dict[str, Any]) -> List[str]:
     return blockers
 
 
-def _lead_is_send_ready(lead: Dict[str, Any], *, allow_rule_based_approval: bool) -> Tuple[bool, List[str]]:
+def _lead_is_send_ready(lead: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    """Return (send_ready, blockers) using the Ops-Status-based readiness rule.
+
+    Admin Approved and Send Mode are no longer required gates; Scheduled Send Date is.
+    """
     blockers: List[str] = []
     if _lead_status(lead) == "not_fit":
         blockers.append("lead_status_not_fit")
@@ -314,12 +324,10 @@ def _lead_is_send_ready(lead: Dict[str, Any], *, allow_rule_based_approval: bool
         blockers.append(f"duplicate_status_{_lead_duplicate_status(lead) or 'unknown'}")
     if _lead_casl_basis(lead) not in CASL_READY_VALUES:
         blockers.append(f"casl_basis_{_lead_casl_basis(lead) or 'missing'}")
-    if _lead_send_mode(lead) not in APPROVED_SEND_MODES:
-        blockers.append(f"send_mode_{_lead_send_mode(lead) or 'missing'}")
     if not _lead_draft_id(lead):
         blockers.append("missing_gmail_draft_id")
-    if not allow_rule_based_approval and not _lead_admin_approved(lead):
-        blockers.append("admin_approval_required")
+    if not _lead_scheduled_send_date(lead):
+        blockers.append("missing_scheduled_send_date")
     return len(blockers) == 0, blockers
 
 
@@ -346,7 +354,7 @@ def _lead_ready_to_draft(lead: Dict[str, Any]) -> bool:
 
 
 def _lead_follow_up_due_status(lead: Dict[str, Any]) -> bool:
-    if _lead_has_replied(lead) or _lead_has_sent(lead):
+    if _lead_has_replied(lead):
         return False
     lead_status = _lead_status(lead)
     if lead_status not in {"outreach_sent", "email_1_sent", "email_2_sent"}:
@@ -457,11 +465,12 @@ def _find_duplicate_groups(records: List[Dict[str, Any]]) -> Tuple[List[Duplicat
 def classify_lead(
     lead: Dict[str, Any],
     *,
-    allow_rule_based_approval: bool,
     duplicate_group_membership: set[str],
 ) -> Classification:
     if _lead_has_replied(lead):
         return Classification("replied", [], "replied")
+    if _lead_follow_up_due_status(lead):
+        return Classification("follow_up_due", [], "follow_up_due")
     if _lead_has_sent(lead):
         return Classification("sent", [], "sent")
 
@@ -503,12 +512,9 @@ def classify_lead(
     if draft_health_reason:
         return Classification("needs_reconciliation", [draft_health_reason], draft_health_reason)
 
-    if _lead_follow_up_due_status(lead):
-        return Classification("follow_up_due", [], "follow_up_due")
-
     draft_id = _lead_draft_id(lead)
     if draft_id:
-        send_ready, send_blockers = _lead_is_send_ready(lead, allow_rule_based_approval=allow_rule_based_approval)
+        send_ready, send_blockers = _lead_is_send_ready(lead)
         if send_ready:
             return Classification("ready_to_send", [], "ready_to_send")
         return Classification("draft_created", send_blockers, "draft_created")
@@ -695,7 +701,6 @@ def main() -> None:
     for record in records:
         classification = classify_lead(
             record,
-            allow_rule_based_approval=ALLOW_RULE_BASED_APPROVAL,
             duplicate_group_membership=duplicate_group_membership,
         )
         status_counts[classification.status] += 1
