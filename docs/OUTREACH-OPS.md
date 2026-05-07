@@ -2,6 +2,8 @@
 
 This runbook documents the current Anvis outreach workflow using the scripts already in this repo. It reflects the current checkpoint:
 
+- Ops Status is the workflow source of truth
+- `Blocker Reason` explains why a record is blocked
 - Gmail OAuth scopes fixed
 - Email copy and safety fixed
 - Gmail draft redraft tool exists
@@ -13,19 +15,39 @@ This runbook documents the current Anvis outreach workflow using the scripts alr
 - Notion views are cleaned
 - canonical Notion field alignment Phase 1 is done
 
+## Do Not Use As Approval Gate
+
+- `Lead Status`
+- `Outreach Status`
+- `Auto-Send Eligible`
+- `Sequence Step`
+- `Reply Status`
+
+These fields may remain for history, reporting, or compatibility, but they do not approve draft or send actions when Ops Status exists.
+
+Legacy fields are scheduled for deletion and should not be treated as operating inputs:
+
+- `Lead Status`
+- `Outreach Status`
+- `Auto-Send Eligible`
+- `Admin Approved`
+- `Send Mode`
+- `Reply Status`
+
 ## 1. System Overview
 
 - `agents/run_lead_scraper.py` finds leads for one active city at a time and writes qualified records to Notion.
+- `agents/update_outreach_ops_status.py` refreshes `Ops Status` and `Blocker Reason`.
 - `agents/validate_outreach_notion.py` checks Notion readiness before drafting or sending.
-- `agents/generate_drafts_from_notion.py --mode email1` generates first-touch Gmail drafts and updates Notion draft state.
+- `agents/generate_drafts_from_notion.py --mode email1` generates first-touch Gmail drafts only when `Ops Status = ready_to_draft`.
 - `agents/redraft_existing_gmail_drafts.py` repairs stale or invalid draft bodies without changing the outreach strategy.
 - `agents/backfill_casl_basis.py` classifies CASL basis and marks manual review vs rule-sendable records.
 - `agents/reconcile_gmail_drafts_with_notion.py` reconciles stale or non-active drafts before send.
-- `agents/send_approved_gmail_drafts.py` performs dry-run or live gated sending.
+- `agents/send_approved_gmail_drafts.py` performs dry-run or live gated sending only when `Ops Status = ready_to_send`.
 - `agents/check_gmail_replies.py` checks Gmail threads for real replies and marks Notion replied only when appropriate.
 - `agents/generate_drafts_from_notion.py --mode followups` handles due follow-up draft generation.
 
-Canonical Notion fields are the primary source of truth:
+Canonical Notion fields remain useful inputs, but they are not the approval gate when Ops Status exists:
 
 - `Lead Status`
 - `Gmail Sent Status`
@@ -45,20 +67,34 @@ Legacy compatibility fields are still accepted where the scripts support them:
 - `Sequence Step`
 - `Last Email Sent At`
 
-## 2. Daily Operator Checklist
+## Safe Operating Order
 
-1. Pick one active city only.
-2. Run the city scraper.
-3. Validate the Notion queue.
-4. Generate drafts for Email 1.
-5. Inspect the draft batch.
-6. Redraft any stale or weak drafts.
-7. Backfill CASL basis.
-8. Dry-run the send step.
-9. Reconcile if dry-run shows stale or non-active drafts.
-10. Run live send in batches of 10 or 20 only when the dry-run is clean.
-11. Run the reply checker after sends.
-12. Queue follow-up drafts when they become due.
+1. Scrape or intake leads.
+2. Run `agents/update_outreach_ops_status.py`.
+3. Run `agents/outreach_health_check.py`.
+4. Run `agents/generate_drafts_from_notion.py --mode email1`.
+5. Run `agents/update_outreach_ops_status.py` again if draft state changed.
+6. Send only records with `Ops Status = ready_to_send`.
+7. Run `agents/reconcile_gmail_drafts_with_notion.py` for stale or non-active drafts.
+8. Run `agents/check_gmail_replies.py`.
+9. Run `agents/outreach_health_check.py` again.
+
+## 2. Weekly Operator Checklist
+
+1. Sunday: pick one active city only.
+2. Sunday: run the city scraper.
+3. Sunday: refresh Ops Status.
+4. Sunday: check the health report.
+5. Sunday: generate drafts for Email 1 only for `ready_to_draft`.
+6. Sunday: inspect the draft batch.
+7. Sunday: redraft any stale or weak drafts.
+8. Sunday: backfill CASL basis.
+9. Monday 8:00 AM ET: dry-run the send step before the first live run.
+10. Monday 8:00 AM ET: reconcile if the dry-run shows stale or non-active drafts.
+11. Monday 8:00 AM ET: live send only records that are `ready_to_send`.
+12. Monday 8:00 AM ET: no send cap is applied in the scheduled send workflow.
+13. Monday 8:00 AM ET: run the reply checker after sends.
+14. Monday 8:00 AM ET: queue follow-up drafts when they become due.
 
 ## 3. City Queue Workflow
 
@@ -87,9 +123,10 @@ Legacy compatibility fields are still accepted where the scripts support them:
 - Run `agents/generate_drafts_from_notion.py --mode email1` for first-touch drafting.
 - Use `--mode followups` only for due follow-up drafts.
 - Draft generation should never auto-send.
-- Draft generation should respect `Lead Status`, `Gmail Sent Status`, `Gmail Match Status`, `CASL Basis`, `Duplicate Status`, and `Send Mode`.
+- Draft generation should respect `Ops Status`, `Gmail Sent Status`, `Gmail Match Status`, `CASL Basis`, `Duplicate Status`, and `Send Mode`.
+- Draft generation requires `Ops Status = ready_to_draft`.
 - Treat `CASL Basis = manual_research_needed` as not auto-sendable.
-- Treat `CASL Basis = conspicuously_published_business_email` as rule-sendable if every other gate passes.
+- Treat `CASL Basis = conspicuously_published_business_email` as rule-sendable only if every other gate passes.
 
 ## 7. Draft Inspection Checklist
 
@@ -123,14 +160,14 @@ Legacy compatibility fields are still accepted where the scripts support them:
 - The dry-run should show which records would be sent without creating outbound mail.
 - Use the dry-run result to identify stale or non-active drafts.
 - If the dry-run shows stale or non-active drafts, run reconciliation before sending.
-- Never live send until the dry-run is clean.
+- Never live send until the dry-run is clean and `Ops Status = ready_to_send`.
 
 ## 11. Live Send Workflow
 
 - Live send is gated.
-- Send in batches of 10 or 20.
-- Do not exceed the batch cap in one run.
-- Send only approved records that pass all safety checks.
+- Send in the Monday 8:00 AM ET scheduled workflow.
+- No send cap is applied in the scheduled workflow.
+- Send only approved records that pass all safety checks and have `Ops Status = ready_to_send`.
 - Do not auto-send during scrape or draft generation.
 - Do not bulk edit sent, replied, archived, paid_client, or do-not-contact records.
 
@@ -161,12 +198,12 @@ Legacy compatibility fields are still accepted where the scripts support them:
 
 ## 15. Notion Field Meanings
 
-- `Lead Status`: canonical lead state; primary gate for outreach progression.
+- `Lead Status`: historical/classification field; do not use as the approval gate when `Ops Status` exists.
 - `Gmail Sent Status`: whether an outbound Gmail send has actually occurred.
 - `Gmail Match Status`: whether Gmail state matches the expected outreach state.
 - `CASL Basis`: compliance basis for email eligibility.
 - `Duplicate Status`: duplicate-control state.
-- `Send Mode`: whether the record is draft-only, rule-gated, or auto-send-gated.
+- `Send Mode`: historical/classification field; do not use as the approval gate when `Ops Status` exists.
 - `Top Issue`: the main problem the outreach message should mention.
 - `Outreach Angle`: the framing used in the email copy.
 - `Last Outreach Date`: the last send date used by draft and reply logic.
@@ -183,8 +220,9 @@ Legacy compatibility fields:
 
 - `Ops Status` is the operational classifier output used to route a record to the next human or automated step.
 - `Blocker Reason` stores the machine-readable blocker codes that explain why a record is not ready.
-- Treat `Ops Status` as an overlay on top of the canonical Notion fields, not a replacement for them.
+- Treat `Ops Status` as the source of truth for draft/send readiness.
 - The ops classifier is dry-run by default and should only update these fields after you review the preview output.
+- Do not use `Lead Status`, `Outreach Status`, `Auto-Send Eligible`, `Sequence Step`, or `Reply Status` as approval gates.
 - Do not use `Ops Status` to overwrite `Lead Status`, `CASL Basis`, `Gmail Sent Status`, or `Gmail Match Status`.
 
 ## 16. Gmail Label Behavior
@@ -192,7 +230,7 @@ Legacy compatibility fields:
 - Sent messages get the `Anvis/Leads` label after send.
 - Reconciled or rebuilt drafts keep the outreach label behavior consistent where supported.
 - Do not depend on labels as the only source of truth.
-- Notion remains the operational source of truth for lead state and send state.
+- Ops Status remains the operational source of truth for draft and send state.
 
 ## 17. Troubleshooting
 
@@ -214,6 +252,12 @@ Legacy compatibility fields:
 - Stop if a record is sent, replied, archived, paid_client, or do-not-contact.
 - Stop if a script asks for a manual gate you have not completed yet.
 
+## Preserve Email Copy
+
+- `src/email_writer.py` is the source of outbound email copy.
+- Do not rewrite the copy during ops cleanup.
+- Keep wording changes separate from workflow or safety cleanup.
+
 ## 19. Exact PowerShell Commands
 
 Use the repo venv:
@@ -227,7 +271,7 @@ $env:ACTIVE_PROVINCE="Ontario"
 $env:ONE_CITY_PER_RUN="true"
 .\.venv\Scripts\python.exe agents\run_lead_scraper.py
 
-$env:MAX_DRAFTS_PER_RUN="20"
+$env:MAX_DRAFTS_PER_RUN="150"
 .\.venv\Scripts\python.exe agents\generate_drafts_from_notion.py --mode email1
 
 $env:REDRAFT_DRY_RUN="true"
@@ -242,14 +286,18 @@ $env:RECONCILE_DRY_RUN="true"
 $env:MAX_RECONCILE_DRAFTS="20"
 .\.venv\Scripts\python.exe agents\reconcile_gmail_drafts_with_notion.py
 
+$env:DRY_RUN="true"
 $env:SEND_DRY_RUN="true"
-$env:SEND_APPROVED_DRAFTS="false"
-$env:MAX_SENDS_PER_RUN="10"
+$env:SEND_APPROVED_DRAFTS="true"
+$env:ALLOW_RULE_BASED_APPROVAL="true"
+$env:ALLOW_LEGACY_STATUS_FALLBACK="false"
 .\.venv\Scripts\python.exe agents\send_approved_gmail_drafts.py
 
+$env:DRY_RUN="false"
 $env:SEND_DRY_RUN="false"
 $env:SEND_APPROVED_DRAFTS="true"
-$env:MAX_SENDS_PER_RUN="10"
+$env:ALLOW_RULE_BASED_APPROVAL="true"
+$env:ALLOW_LEGACY_STATUS_FALLBACK="false"
 .\.venv\Scripts\python.exe agents\send_approved_gmail_drafts.py
 
 $env:DRY_RUN="true"
@@ -258,15 +306,16 @@ $env:DRY_RUN="true"
 .\.venv\Scripts\python.exe agents\generate_drafts_from_notion.py --mode followups
 ```
 
-Suggested operating order for a normal session:
+Suggested weekly operating order for a normal session:
 
-1. Validate.
-2. Scrape one city.
-3. Generate drafts.
-4. Inspect and redraft.
-5. Backfill CASL basis.
-6. Dry-run send.
-7. Reconcile if needed.
-8. Live send in a capped batch.
-9. Check replies.
-10. Queue follow-ups when due.
+1. Sunday: validate.
+2. Sunday: scrape one city.
+3. Sunday: refresh Ops Status.
+4. Sunday: generate drafts.
+5. Sunday: inspect and redraft.
+6. Sunday: backfill CASL basis.
+7. Monday 8:00 AM ET: dry-run send.
+8. Monday 8:00 AM ET: reconcile if needed.
+9. Monday 8:00 AM ET: live send all ready_to_send records.
+10. Monday 8:00 AM ET: check replies.
+11. Monday 8:00 AM ET: queue follow-ups when due.

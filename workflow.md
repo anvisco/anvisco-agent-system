@@ -4,9 +4,41 @@ Last updated: 2026-05-05
 
 ## Operating Principle
 
-Notion is the source of truth. Gmail is used for drafts and reply detection. Brian reviews and sends manually unless the gated auto-send mode is explicitly turned on.
+Ops Status is the workflow source of truth. Gmail is used for drafts and reply detection. Brian reviews and sends manually unless the gated send path is explicitly enabled.
 
 Keep the system simple, inspectable, and draft-first by default.
+
+## Do Not Use As Approval Gate
+
+- `Lead Status`
+- `Outreach Status`
+- `Auto-Send Eligible`
+- `Sequence Step`
+- `Reply Status`
+
+These are historical, reporting, or compatibility inputs only when Ops Status exists.
+
+Legacy workflow fields are deprecated and scheduled for deletion:
+
+- `Lead Status`
+- `Outreach Status`
+- `Auto-Send Eligible`
+- `Admin Approved`
+- `Send Mode`
+- `Reply Status`
+
+## Safe Operating Order
+
+1. Sunday: scrape or intake leads.
+2. Sunday: run `agents/update_outreach_ops_status.py`.
+3. Sunday: run `agents/generate_drafts_from_notion.py`.
+4. Sunday: run the health check.
+5. Monday 8:00 AM ET: run `agents/update_outreach_ops_status.py` again.
+6. Monday 8:00 AM ET: send only records with `Ops Status = ready_to_send`.
+7. Monday 8:00 AM ET: run `agents/update_outreach_ops_status.py` again after send.
+8. Monday 8:00 AM ET: run reconciliation for stale drafts or mismatched Gmail state if needed.
+9. Monday 8:00 AM ET: run reply checking.
+10. Monday 8:00 AM ET: run the health check again.
 
 ## Operating Modes
 
@@ -42,23 +74,24 @@ Auto-send is allowed only when all required checks pass, including:
 - Clinic strengths have enough real content
 - Safety validation passes
 - Sender alias is verified
+- `Ops Status = ready_to_send`
 
 If any of those checks fail, the system falls back to draft mode.
 
-## Daily Lead Workflow
+## Weekly Intake Workflow
 
-1. Find Canadian dental and local service leads using the active city only.
+1. Sunday intake finds Canadian dental and local service leads using the active city only.
 2. Dedupe against Notion by website, email, phone, and practice name.
 3. Visit the clinic website.
 4. Extract useful public information.
 5. Audit the website for conversion opportunities, trust signals, local discovery, mobile experience, and booking flow.
 6. Score and tier the lead.
 7. Create or update the Notion lead record.
-8. Generate the outreach email draft.
-9. Create the Gmail draft and label it `Anvis/Leads`.
-10. Set Notion status to Draft Ready.
+8. Refresh Ops Status and Blocker Reason.
+9. Generate the outreach email draft when `Ops Status = ready_to_draft`.
+10. Set Ops Status to reflect the next valid step.
 
-Never send automatically unless the gated mode is explicitly enabled.
+Monday sends are automatic only for `Ops Status = ready_to_send`.
 
 ## Website Audit Workflow
 
@@ -144,17 +177,18 @@ Rules:
 - One main issue per email
 - Do not invent facts
 - Do not mention Loom unless available
+- Do not rewrite copy during ops cleanup. `src/email_writer.py` is the source of outbound copy.
 
 ## Sales Reply Workflow
 
 When a lead replies:
 
-1. Update Notion status to Replied.
+1. Update Ops Status to `replied`.
 2. Summarize what they are asking or objecting to.
 3. Recommend the next action: answer, book call, send proposal, nurture, or close lost.
 4. Draft a Gmail reply.
 5. Brian reviews and sends manually.
-6. Update Notion status.
+6. Update Ops Status and reply tracking fields.
 
 ## Client Delivery Workflow
 
@@ -193,3 +227,10 @@ Brian should manually review:
 - Deposit status before project confirmation
 - Final payment before launch
 - Any manual client status change
+
+## Weekly Automation
+
+- Sunday intake: scraper -> Ops refresh -> drafts -> health check
+- Monday 8:00 AM ET: Ops refresh -> send ready_to_send -> Ops refresh -> reply check -> health check
+- No send cap is applied in the Monday scheduled send workflow
+- `src/email_writer.py` remains the preserved outbound copy source

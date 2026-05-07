@@ -23,9 +23,7 @@ CONTACTED_OR_CLOSED = {
 }
 EARLY_STAGE = {"New Lead", "Draft Ready", "audit_ready", "draft_ready", "outreach_drafted"}
 SOURCE_GOOGLE_PLACES_NEW = "Google Places New"
-LEAD_STATUS_CANDIDATES = ("Lead Status",)
 AUDIT_STATUS_CANDIDATES = ("Audit Status",)
-OUTREACH_STATUS_CANDIDATES = ("Outreach Status",)
 MISSING_SCHEMA_FIELDS_LOGGED: set[str] = set()
 
 
@@ -53,8 +51,6 @@ FIELD_MAP = {
     "Source": "source",
     "Last Scraped Date": None,
     "Scrape Notes": "scrape_notes",
-    "Outreach Status": None,
-    "Lead Status": None,
     "Audit Status": None,
     "Subject Angle": "subject_angle",
     "Clinic Strengths": "clinic_strengths",
@@ -79,6 +75,14 @@ FIELD_MAP = {
     "Booking URL": "booking_url",
     "Languages": "languages",
     "Services": "services",
+}
+
+LEGACY_NOTION_FIELDS = {
+    "Outreach Status",
+    "Lead Status",
+    "Send Mode",
+    "Auto-Send Eligible",
+    "Admin Approved",
 }
 
 
@@ -219,6 +223,7 @@ def ensure_source_option(schema_properties: Dict[str, Any], data_source_id: str)
 
 def _lead_key_values(page: Dict[str, Any]) -> Dict[str, str]:
     props = page.get("properties", {})
+    ops_status = _plain_text(props.get("Ops Status", {}))
     lead_status = _plain_text(props.get("Lead Status", {}))
     outreach_status = _plain_text(props.get("Outreach Status", {}))
     return {
@@ -226,7 +231,7 @@ def _lead_key_values(page: Dict[str, Any]) -> Dict[str, str]:
         "domain": normalize_domain(_plain_text(props.get("Domain", {})) or _plain_text(props.get("Website", {}))),
         "phone": clean_phone(_plain_text(props.get("Phone", {}))),
         "name_address": f"{_plain_text(props.get('Business Name', {})).lower()}|{_plain_text(props.get('Address', {})).lower()}",
-        "status": lead_status or outreach_status,
+        "status": ops_status or lead_status or outreach_status,
         "last_scraped": _plain_text(props.get("Last Scraped Date", {})),
         "score": _plain_text(props.get("Lead Quality Score", {})),
     }
@@ -296,6 +301,8 @@ def _build_create_properties(audited: AuditedLead, schema_properties: Dict[str, 
     props: Dict[str, Any] = {}
     title_property = _title_property(schema_properties)
     for notion_field, attr in FIELD_MAP.items():
+        if notion_field in LEGACY_NOTION_FIELDS and not settings.write_legacy_notion_fields:
+            continue
         if notion_field not in schema_properties and notion_field != "Business Name":
             _log_missing_schema_field((notion_field,))
             continue
@@ -304,8 +311,6 @@ def _build_create_properties(audited: AuditedLead, schema_properties: Dict[str, 
             value = audited.business_name
         elif notion_field == "Last Scraped Date":
             value = now_iso_date()
-        elif notion_field == "Outreach Status":
-            value = "New Lead"
         property_name = title_property if notion_field == "Business Name" and title_property != notion_field else notion_field
         prop_info = schema_properties.get(property_name)
         if not prop_info:
@@ -313,17 +318,7 @@ def _build_create_properties(audited: AuditedLead, schema_properties: Dict[str, 
         notion_value = _property_value(prop_info["type"], value)
         if notion_value:
             props[property_name] = notion_value
-    lead_status_property = _first_existing_property_name(schema_properties, LEAD_STATUS_CANDIDATES)
-    outreach_status_property = _first_existing_property_name(schema_properties, OUTREACH_STATUS_CANDIDATES)
     audit_status_property = _first_existing_property_name(schema_properties, AUDIT_STATUS_CANDIDATES)
-    if lead_status_property and lead_status_property not in props:
-        notion_value = _property_value(schema_properties[lead_status_property]["type"], "audit_ready")
-        if notion_value:
-            props[lead_status_property] = notion_value
-    elif outreach_status_property and outreach_status_property not in props:
-        notion_value = _property_value(schema_properties[outreach_status_property]["type"], "New Lead")
-        if notion_value:
-            props[outreach_status_property] = notion_value
     if audit_status_property and audit_status_property not in props:
         notion_value = _property_value(schema_properties[audit_status_property]["type"], "complete")
         if notion_value:
@@ -338,10 +333,10 @@ def _build_update_properties(page: Dict[str, Any], audited: AuditedLead, schema_
     updates: Dict[str, Any] = {}
     title_property = _title_property(schema_properties)
     for notion_field, attr in FIELD_MAP.items():
+        if notion_field in LEGACY_NOTION_FIELDS and not settings.write_legacy_notion_fields:
+            continue
         if notion_field not in schema_properties and notion_field != "Business Name":
             _log_missing_schema_field((notion_field,))
-            continue
-        if notion_field == "Outreach Status":
             continue
         incoming = getattr(audited, attr) if attr else None
         property_name = title_property if notion_field == "Business Name" and title_property != notion_field else notion_field

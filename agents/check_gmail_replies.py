@@ -476,11 +476,12 @@ def _build_category_updates(
 ) -> Dict[str, Any]:
     updates: Dict[str, Any] = {}
     today = date.today()
+    write_legacy_fields = settings.write_legacy_notion_fields
 
     if category == REPLY_HUMAN:
-        if _first_existing(schema_properties, ("Lead Status",)):
+        if write_legacy_fields and _first_existing(schema_properties, ("Lead Status",)):
             _add_update(updates, schema_properties, ("Lead Status",), "replied")
-        else:
+        elif write_legacy_fields:
             _add_update(updates, schema_properties, REPLY_STATUS_CANDIDATES, "Replied")
             _add_update(updates, schema_properties, ("Outreach Status",), "Replied")
         _add_update(updates, schema_properties, SEQUENCE_STEP_CANDIDATES, "Replied")
@@ -491,7 +492,8 @@ def _build_category_updates(
     elif category == REPLY_UNSUB:
         _checkbox_update(updates, schema_properties, DO_NOT_CONTACT_CANDIDATES, True)
         _add_update(updates, schema_properties, GMAIL_MATCH_STATUS_CANDIDATES, "replied")
-        _add_update(updates, schema_properties, REPLY_STATUS_CANDIDATES, "unsubscribe")
+        if write_legacy_fields:
+            _add_update(updates, schema_properties, REPLY_STATUS_CANDIDATES, "unsubscribe")
         _add_update(updates, schema_properties, REPLY_CATEGORY_CANDIDATES, REPLY_UNSUB)
         _add_update(updates, schema_properties, REPLY_NOTES_CANDIDATES, REPLY_NOTES_UNSUB)
 

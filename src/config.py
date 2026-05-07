@@ -35,6 +35,7 @@ class Settings:
     send_mode: str
     auto_send_first_emails: bool
     require_admin_approval_for_send: bool
+    write_legacy_notion_fields: bool
     dry_run: bool
     create_gmail_drafts: bool
     daily_lead_limit: int
@@ -59,6 +60,7 @@ settings = Settings(
     ),
     auto_send_first_emails=_as_bool(os.getenv("AUTO_SEND_FIRST_EMAILS"), default=False),
     require_admin_approval_for_send=_as_bool(os.getenv("REQUIRE_ADMIN_APPROVAL_FOR_SEND"), default=True),
+    write_legacy_notion_fields=_as_bool(os.getenv("WRITE_LEGACY_NOTION_FIELDS"), default=False),
     dry_run=_as_bool(os.getenv("DRY_RUN"), default=True),
     create_gmail_drafts=_as_bool(os.getenv("CREATE_GMAIL_DRAFTS"), default=True),
     daily_lead_limit=_as_int(os.getenv("DAILY_LEAD_LIMIT"), default=25),

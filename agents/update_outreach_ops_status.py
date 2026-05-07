@@ -31,6 +31,12 @@ CHECK_GMAIL_DRAFT_HEALTH = os.getenv("CHECK_GMAIL_DRAFT_HEALTH", "false").strip(
     "yes",
     "on",
 }
+ALLOW_LEGACY_STATUS_FALLBACK = os.getenv("ALLOW_LEGACY_STATUS_FALLBACK", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 ALLOW_RULE_BASED_APPROVAL = os.getenv("ALLOW_RULE_BASED_APPROVAL", "false").strip().lower() in {
     "1",
     "true",
@@ -208,6 +214,10 @@ def _lead_status(lead: Dict[str, Any]) -> str:
     return _normalize(_lead_text(lead, LEAD_STATUS_CANDIDATES))
 
 
+def _lead_ops_status(lead: Dict[str, Any]) -> str:
+    return _normalize(_lead_text(lead, OPS_STATUS_CANDIDATES))
+
+
 def _lead_reply_status(lead: Dict[str, Any]) -> str:
     return _normalize(_lead_text(lead, REPLY_STATUS_CANDIDATES))
 
@@ -350,12 +360,13 @@ def _lead_is_active_draft_but_not_send_ready(lead: Dict[str, Any], *, allow_rule
 
 
 def _lead_ready_to_draft(lead: Dict[str, Any]) -> bool:
+    ops_status = _lead_ops_status(lead)
     lead_status = _lead_status(lead)
-    return bool(
-        lead_status in READY_TO_DRAFT_STATUS_VALUES
-        or _lead_top_issue(lead)
-        or _lead_outreach_angle(lead)
-    )
+    if ops_status == OPS_READY_TO_DRAFT_STATUS:
+        return True
+    if ALLOW_LEGACY_STATUS_FALLBACK and lead_status in READY_TO_DRAFT_STATUS_VALUES:
+        return True
+    return bool(_lead_top_issue(lead) or _lead_outreach_angle(lead))
 
 
 def _lead_follow_up_due_status(lead: Dict[str, Any]) -> bool:
@@ -368,7 +379,7 @@ def _lead_follow_up_due_status(lead: Dict[str, Any]) -> bool:
         return False
     follow_up_eligible = (
         sequence_step in {"Email 1 Sent", "Email 2 Sent"}
-        or _lead_status(lead) in {"outreach_sent", "email_1_sent", "email_2_sent"}
+        or (ALLOW_LEGACY_STATUS_FALLBACK and _lead_status(lead) in {"outreach_sent", "email_1_sent", "email_2_sent"})
     )
     if not follow_up_eligible:
         return False
@@ -484,6 +495,8 @@ def classify_lead(
         return Classification("replied", [], "replied")
     if _lead_gmail_match_status(lead) == "bounced":
         return Classification("needs_email_research", ["bounced_email"], "bounced_email")
+    if _lead_ops_status(lead) == "needs_email_research":
+        return Classification("needs_email_research", ["bounced_email"], "bounced_email")
     if _lead_follow_up_due_status(lead):
         return Classification("follow_up_due", [], "follow_up_due")
     if _lead_has_sent(lead):
@@ -542,8 +555,9 @@ def classify_lead(
         blockers.append("missing_top_issue")
     if not _lead_outreach_angle(lead):
         blockers.append("missing_outreach_angle")
-    if _lead_status(lead) not in READY_TO_DRAFT_STATUS_VALUES:
-        blockers.append(f"lead_status_{lead_status or 'missing'}")
+    ops_status = _lead_ops_status(lead)
+    if ops_status and ops_status != OPS_READY_TO_DRAFT_STATUS and not (ALLOW_LEGACY_STATUS_FALLBACK and _lead_status(lead) in READY_TO_DRAFT_STATUS_VALUES):
+        blockers.append(f"ops_status_{ops_status or 'missing'}")
     if not blockers:
         blockers.append("not_draft_ready")
     return Classification("blocked", blockers, blockers[0])

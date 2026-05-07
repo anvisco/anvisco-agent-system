@@ -592,6 +592,7 @@ def build_notion_send_updates(
     updates: Dict[str, Any] = {}
     now = datetime.now(timezone.utc)
     sent_date = now.isoformat()
+    write_legacy_fields = settings.write_legacy_notion_fields
 
     current_step = _lead_sequence_step(lead)
     sent_step = _DRAFT_TO_SENT_STEP.get(current_step, "Email 1 Sent")
@@ -604,12 +605,13 @@ def build_notion_send_updates(
         follow_up_date = _business_days_from(now, FOLLOWUP_DELAY_AFTER_EMAIL_1_BUSINESS_DAYS)
 
     _set_update(updates, schema_properties, GMAIL_SENT_STATUS_CANDIDATES, REQUIRED_GMAIL_SENT_STATUS)
-    if _set_update(updates, schema_properties, ["Lead Status"], REQUIRED_LEAD_STATUS) is None:
-        _set_update(updates, schema_properties, ["Outreach Status"], REQUIRED_OUTREACH_STATUS)
     _set_update(updates, schema_properties, LAST_OUTREACH_DATE_CANDIDATES, sent_date)
     if thread_id:
         _set_update(updates, schema_properties, GMAIL_THREAD_ID_CANDIDATES, thread_id)
     _set_update(updates, schema_properties, GMAIL_MATCH_STATUS_CANDIDATES, REQUIRED_GMAIL_MATCH_STATUS)
+    if write_legacy_fields:
+        if _set_update(updates, schema_properties, ["Lead Status"], REQUIRED_LEAD_STATUS) is None:
+            _set_update(updates, schema_properties, ["Outreach Status"], REQUIRED_OUTREACH_STATUS)
 
     if is_final_email:
         # Mark the sequence as complete rather than leaving it at "Email 3 Sent"

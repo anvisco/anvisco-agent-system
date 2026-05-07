@@ -1292,6 +1292,7 @@ def build_email_1_sequence_updates(
 ) -> Dict[str, Any]:
     properties = schema.get("properties", {})
     updates: Dict[str, Any] = {}
+    write_legacy_fields = settings.write_legacy_notion_fields
 
     emails = sequence["emails"]
     _add_update_if_empty(updates, properties, lead, EMAIL_1_SUBJECT_CANDIDATES, emails["email_1"]["subject"])
@@ -1317,8 +1318,9 @@ def build_email_1_sequence_updates(
     _add_update_if_empty(updates, properties, lead, RECOMMENDED_FIX_CANDIDATES, sequence["recommended_fix"])
     _add_update_if_empty(updates, properties, lead, EMAIL_ANGLE_CANDIDATES, sequence["email_angle"])
     _add_update_if_empty(updates, properties, lead, LOOM_LINK_CANDIDATES, sequence["loom_link"])
-    _add_update(updates, properties, SEND_MODE_CANDIDATES, settings.send_mode)
-    _add_update(updates, properties, AUTO_SEND_ELIGIBLE_CANDIDATES, auto_send_eligible)
+    if write_legacy_fields:
+        _add_update(updates, properties, SEND_MODE_CANDIDATES, settings.send_mode)
+        _add_update(updates, properties, AUTO_SEND_ELIGIBLE_CANDIDATES, auto_send_eligible)
 
     tier_property = _first_existing_property_name(properties, TIER_CANDIDATES)
     top_issue_property = _first_existing_property_name(properties, TOP_ISSUE_CANDIDATES)
@@ -1335,9 +1337,9 @@ def build_email_1_sequence_updates(
         if thread_id:
             _add_update(updates, properties, GMAIL_THREAD_ID_CANDIDATES, thread_id)
         _add_update(updates, properties, SEQUENCE_STEP_CANDIDATES, "Email 1 Drafted")
-        if _first_existing_property_name(properties, ["Lead Status"]):
+        if write_legacy_fields and _first_existing_property_name(properties, ["Lead Status"]):
             _add_update(updates, properties, ["Lead Status"], "outreach_drafted")
-        else:
+        elif write_legacy_fields:
             _add_update(updates, properties, OUTREACH_STATUS_FIELD_CANDIDATES, "draft_ready")
         _add_update(updates, properties, LAST_EMAIL_DRAFTED_AT_CANDIDATES, datetime.now(timezone.utc).date().isoformat())
         scheduled_send = _next_monday_date()
@@ -1348,9 +1350,9 @@ def build_email_1_sequence_updates(
         _add_update(updates, properties, GMAIL_THREAD_ID_CANDIDATES, thread_id or sent_message_id)
         _add_update(updates, properties, GMAIL_SENT_STATUS_CANDIDATES, sent_status or "Sent")
         _add_update(updates, properties, SEQUENCE_STEP_CANDIDATES, "Email 1 Sent")
-        if _first_existing_property_name(properties, ["Lead Status"]):
+        if write_legacy_fields and _first_existing_property_name(properties, ["Lead Status"]):
             _add_update(updates, properties, ["Lead Status"], "outreach_sent")
-        else:
+        elif write_legacy_fields:
             _add_update(updates, properties, OUTREACH_STATUS_FIELD_CANDIDATES, "Email 1 Sent")
         _add_update(updates, properties, LAST_OUTREACH_DATE_CANDIDATES, datetime.now(timezone.utc).date().isoformat())
 
@@ -1619,7 +1621,6 @@ def _process_due_followup(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
     email = _get_text_value(_get_property(lead, email_property or ""))
     verified_from_email = get_preferred_send_as_email(settings.gmail_send_as_email)
     alias_verified = bool(verified_from_email)
-    lead_status = _normalize_text(outreach_status)
     blocked_reasons = _draft_block_reasons(lead, require_unique_duplicate=False, require_gmail_match_no_match=False)
     if blocked_reasons:
         print(f"Skipped {lead_name}: {', '.join(blocked_reasons)}")
@@ -1634,10 +1635,10 @@ def _process_due_followup(schema: Dict[str, Any], lead: Dict[str, Any]) -> str:
         print(f"Skipped {lead_name}: Gmail Match Status is bounced")
         return "skipped"
 
-    if sequence_step == "Email 1 Sent" or outreach_status == "Email 1 Sent" or (lead_status == "outreach_sent" and not sequence_step):
+    if sequence_step == "Email 1 Sent" or (settings.write_legacy_notion_fields and outreach_status == "Email 1 Sent"):
         target_step = "Email 2 Drafted"
         email_step = "email_2"
-    elif sequence_step == "Email 2 Sent" or outreach_status == "Email 2 Sent":
+    elif sequence_step == "Email 2 Sent" or (settings.write_legacy_notion_fields and outreach_status == "Email 2 Sent"):
         target_step = "Email 3 Drafted"
         email_step = "email_3"
     else:
@@ -1693,7 +1694,6 @@ def _sync_manual_sent_steps(schema: Dict[str, Any]) -> None:
         sequence_step_property = _first_existing_property_name(properties, SEQUENCE_STEP_CANDIDATES)
         last_outreach_property = _first_existing_property_name(properties, LAST_OUTREACH_DATE_CANDIDATES)
         next_followup_property = _first_existing_property_name(properties, NEXT_FOLLOW_UP_DATE_CANDIDATES)
-        outreach_status = _get_text_value(_get_property(lead, outreach_status_property or ""))
         sequence_step = _get_text_value(_get_property(lead, sequence_step_property or ""))
         last_outreach = _get_date_value(_get_property(lead, last_outreach_property or ""))
         next_followup = _get_date_value(_get_property(lead, next_followup_property or ""))
@@ -1703,8 +1703,8 @@ def _sync_manual_sent_steps(schema: Dict[str, Any]) -> None:
 
         if (
             sequence_step == "Email 1 Sent"
-            or outreach_status == "Email 1 Sent"
-            or (outreach_status == "outreach_sent" and not sequence_step)
+            or (settings.write_legacy_notion_fields and _get_text_value(_get_property(lead, outreach_status_property or "")) == "Email 1 Sent")
+            or (settings.write_legacy_notion_fields and _get_text_value(_get_property(lead, outreach_status_property or "")) == "outreach_sent" and not sequence_step)
         ) and (sequence_step != "Email 1 Sent" or not last_outreach or not next_followup):
             if settings.dry_run:
                 print(f"DRY RUN: would set follow-up schedule for {_get_lead_name(lead)} after Email 1 Sent")
@@ -1714,7 +1714,7 @@ def _sync_manual_sent_steps(schema: Dict[str, Any]) -> None:
                 update_notion_lead(lead["id"], updates)
         elif (
             sequence_step == "Email 2 Sent"
-            or outreach_status == "Email 2 Sent"
+            or (settings.write_legacy_notion_fields and _get_text_value(_get_property(lead, outreach_status_property or "")) == "Email 2 Sent")
         ) and (sequence_step != "Email 2 Sent" or not last_outreach or not next_followup):
             if settings.dry_run:
                 print(f"DRY RUN: would set follow-up schedule for {_get_lead_name(lead)} after Email 2 Sent")
