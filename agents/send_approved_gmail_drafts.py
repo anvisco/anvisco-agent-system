@@ -93,6 +93,10 @@ BLOCKED_GMAIL_MATCH_STATUSES = {"sent_exists", "replied"}
 BLOCKED_GMAIL_SENT_STATUSES = {"sent"}
 OPS_READY_TO_SEND = "ready_to_send"
 REQUIRED_SEND_MODE = "auto_send_gated"
+
+# Follow-up scheduling: business days to wait after each email before drafting the next.
+FOLLOWUP_DELAY_AFTER_EMAIL_1_BUSINESS_DAYS = 3
+FOLLOWUP_DELAY_AFTER_EMAIL_2_BUSINESS_DAYS = 5
 REQUIRED_OUTREACH_STATUS = "Email 1 Sent"
 REQUIRED_LEAD_STATUS = "outreach_sent"
 REQUIRED_GMAIL_MATCH_STATUS = "sent_exists"
@@ -588,11 +592,16 @@ def build_notion_send_updates(
     updates: Dict[str, Any] = {}
     now = datetime.now(timezone.utc)
     sent_date = now.isoformat()
-    follow_up_date = _business_days_from(now, 3)
 
     current_step = _lead_sequence_step(lead)
     sent_step = _DRAFT_TO_SENT_STEP.get(current_step, "Email 1 Sent")
     is_final_email = sent_step == "Email 3 Sent"
+
+    # Follow-up delay is step-specific: +3 days after Email 1, +5 days after Email 2.
+    if sent_step == "Email 2 Sent":
+        follow_up_date = _business_days_from(now, FOLLOWUP_DELAY_AFTER_EMAIL_2_BUSINESS_DAYS)
+    else:
+        follow_up_date = _business_days_from(now, FOLLOWUP_DELAY_AFTER_EMAIL_1_BUSINESS_DAYS)
 
     _set_update(updates, schema_properties, GMAIL_SENT_STATUS_CANDIDATES, REQUIRED_GMAIL_SENT_STATUS)
     if _set_update(updates, schema_properties, ["Lead Status"], REQUIRED_LEAD_STATUS) is None:
@@ -601,16 +610,15 @@ def build_notion_send_updates(
     if thread_id:
         _set_update(updates, schema_properties, GMAIL_THREAD_ID_CANDIDATES, thread_id)
     _set_update(updates, schema_properties, GMAIL_MATCH_STATUS_CANDIDATES, REQUIRED_GMAIL_MATCH_STATUS)
-    _set_update(updates, schema_properties, SEQUENCE_STEP_CANDIDATES, sent_step)
-    if not is_final_email:
-        _set_update(
-            updates,
-            schema_properties,
-            NEXT_FOLLOW_UP_DATE_CANDIDATES,
-            follow_up_date,
-            only_if_empty=True,
-            lead=lead,
-        )
+
+    if is_final_email:
+        # Mark the sequence as complete rather than leaving it at "Email 3 Sent"
+        _set_update(updates, schema_properties, SEQUENCE_STEP_CANDIDATES, "Sequence Complete")
+    else:
+        _set_update(updates, schema_properties, SEQUENCE_STEP_CANDIDATES, sent_step)
+        # Always write the fresh follow-up date based on the actual send time
+        _set_update(updates, schema_properties, NEXT_FOLLOW_UP_DATE_CANDIDATES, follow_up_date)
+
     return updates
 
 

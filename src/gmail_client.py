@@ -180,6 +180,11 @@ def get_thread(thread_id: str) -> Dict[str, Any]:
     return get_gmail_service().users().threads().get(userId="me", id=thread_id, format="metadata").execute()
 
 
+def get_thread_full(thread_id: str) -> Dict[str, Any]:
+    """Fetch a thread with full message payloads (includes body data for classification)."""
+    return get_gmail_service().users().threads().get(userId="me", id=thread_id, format="full").execute()
+
+
 def is_stale_gmail_thread_error(exc: Exception) -> bool:
     if not isinstance(exc, HttpError):
         return False
